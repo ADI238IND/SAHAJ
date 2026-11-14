@@ -16,7 +16,9 @@ export function eventStore() {
       return { familyId: String(data.family_id), personId: String(data.person_id) };
     },
     async ingest(event: StoredInput) {
-      const body = Buffer.from(JSON.stringify(event.payload));
+      // Bind the resolved identity inside the stored hash as well as metadata.
+      // A retry after reassignment within one family must conflict.
+      const body = Buffer.from(JSON.stringify({ ...event.payload, person_id: event.personId }));
       const { error } = await db.rpc("ingest_raw_event", {
         p_source: event.source, p_provider_event_id: event.id, p_event_type: event.type,
         p_family_id: event.familyId, p_metadata: { person_id: event.personId },

@@ -168,6 +168,15 @@ importers:
 
   apps/api:
     dependencies:
+      '@sahaj/adapters':
+        specifier: workspace:*
+        version: link:../../packages/adapters
+      '@sahaj/atlas':
+        specifier: workspace:*
+        version: link:../../packages/atlas
+      '@sahaj/gate':
+        specifier: workspace:*
+        version: link:../../packages/gate
       '@supabase/supabase-js':
         specifier: 2.119.0
         version: 2.119.0

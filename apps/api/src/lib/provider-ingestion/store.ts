@@ -51,7 +51,7 @@ export function providerStore(): ProviderStore {
     async ingest(event: ProviderEvent) {
       // person_id and consent/call IDs live inside the hashed, encrypted envelope as well as metadata, so a replay
       // after identity reassignment or consent change within one family conflicts instead of being accepted.
-      const envelope: Record<string, unknown> = { person_id: event.personId, ...event.payload };
+      const envelope: Record<string, unknown> = { ...event.payload, person_id: event.personId };
       if (event.callId) envelope.call_id = event.callId;
       if (event.consentId) envelope.consent_id = event.consentId;
       const body = Buffer.from(JSON.stringify(envelope));
