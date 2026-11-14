@@ -32,17 +32,18 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 - [x] **Bounded Readiness Architecture & Schema Probe**:
   - Consumes service-only `public.foundation_readiness()` RPC returning exact JSON contract:
     `{ database: 'connected', schema_ready: boolean, schema_version: 'foundation-v4' }`.
-  - Final migration/schema dependency: Parent is implementing the service-only `public.foundation_readiness()` RPC and will provide the exact readiness migration filename.
+  - Final migration/schema dependency: Parent has applied migration version `20261114150944` (`infra/supabase/migrations/20261114150944_foundation_readiness.sql`) remotely; parent owns reconciling that migration into integration.
   - Consumes exact result defensively, handling missing RPC, malformed response, or false schema (`schema_ready: false`) as HTTP 503 degraded (`missing_schema`, `schema_missing`).
   - Requires `probe.schemaOk === true` as well as `probe.ok === true` and `probe.status === "connected"` for HTTP 200 ready. Regression tested: `connected + schemaOk=false` returns HTTP 503, never 200 ready.
   - Does not query or expose private schemas directly.
-- [x] **Independent Bounded Deadline**:
+- [x] **Independent Bounded Deadline & Comprehensive Abort Handling**:
   - Enforces an independent bounded deadline around the injected probe, ensuring `evaluateReadiness` resolves even when the dependency ignores its timeout or hangs indefinitely.
   - Propagates cancellation via `AbortController` where supported.
+  - Comprehensive abort handling tested: early-return timeout on pre-aborted external signal, mid-probe cancellation propagation, and Next.js request signal (`req.signal`) integration.
   - Guarantees timer clearance (`clearTimeout`) across all execution paths.
   - Tested with never-resolving fake probes and recovery tests using Vitest fake timers.
   - Safe error handling: `isConfigured` exceptions fail safely to HTTP 503 without leaking error details.
-  - SDK abort `{ error }` responses recognized as timeout (`database_timeout`).
+  - SDK abort `{ error }` responses and thrown `AbortError` recognized as timeout (`database_timeout`).
 - [x] **Liveness vs. Readiness Distinction**:
   - Liveness probe (`/api/health/liveness` or `GET /api/health?probe=liveness`) returns HTTP 200 without downstream checks.
   - Readiness probe (`/api/health/readiness` or default `GET /api/health`) evaluates dependencies and returns HTTP 200 when ready or HTTP 503 Service Unavailable when configuration, connectivity, or schema is missing or timed out.
@@ -73,10 +74,12 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 - [x] **PUBLIC Role Handling**:
   - Recognizes `PUBLIC` as an ACL pseudo-role (grantee = 0), never calling `has_*_privilege('public', ...)`.
   - Inspects `aclexplode` grantee = 0 for schema and procedure privilege verification.
-- [x] **Service-Only RPCs**:
-  - Explicitly asserts that all 13 required service-only procedures actually exist before checking execution grants.
-  - Verifies that neither `anon`, `authenticated`, nor `PUBLIC` has `EXECUTE` privileges.
+- [x] **Service-Only RPCs & Exact Signatures**:
+  - Explicitly asserts that all 14 required service-only procedures (including `public.foundation_readiness()`) actually exist via exact procedure signatures (`to_regprocedure`) before checking execution grants.
+  - Verifies that neither `anon`, `authenticated`, nor `PUBLIC` (grantee = 0) has `EXECUTE` privileges.
   - Verifies that `service_role` has `EXECUTE` privileges.
+  - In addition to ACL assertions, both `anon` and `authenticated` roles are tested for direct execution denial against `foundation_readiness()`, `get_voice_media_metadata()`, and `get_call_media_metadata()`.
+  - Asserted RLS helpers in `sahaj_private` (`has_role(uuid,text[])`, `is_person(uuid,uuid)`) exist and are executable by `authenticated` while denied to `anon`.
 - [x] **Anonymous Role Boundary**:
   - Confirms default deny: `anon` cannot read or write any application tables (`families`, `people`, `calls`, `incidents`, `raw_events`, `consents`, etc.).
 - [x] **Authenticated Tenant Boundary**:
@@ -112,11 +115,11 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 
 ## 6. Remaining Remote Verification (Required Before 100% Phase 1 Closure)
 
-In accordance with `coordination/PHASE1-REVIEW.md` and `coordination/PHASE1-ACCEPTANCE-AUDIT.md`, Phase 1 cannot be marked 100% complete until the following parent actions and live readiness evidence are completed:
+In accordance with `coordination/PHASE1-REVIEW.md`, `coordination/PHASE1-ACCEPTANCE-AUDIT.md`, and `coordination/ANTIGRAVITY-IDE-PHASE1.md`, Phase 1 cannot be marked 100% complete until the following parent actions and live readiness evidence are completed:
 
-1. **Schema Dependency Migration (Parent Action)**:
-   - Parent provides the exact migration filename creating `public.foundation_readiness()` returning `{database:'connected', schema_ready:boolean, schema_version:'foundation-v4'}`.
-   - Migration is applied to the dedicated Supabase project.
+1. **Schema Dependency Migration (Parent Action Completed Remotely; Integration Reconcile Pending)**:
+   - Parent has applied migration version `20261114150944` (`infra/supabase/migrations/20261114150944_foundation_readiness.sql`) remotely, creating `public.foundation_readiness()` returning `{database:'connected', schema_ready:boolean, schema_version:'foundation-v4'}`.
+   - Parent owns reconciling that migration into integration.
 2. **Remote Database Security Acceptance (Parent Action)**:
    - Execute `infra/supabase/tests/phase1_security_acceptance.sql` against the connected hosted Supabase project.
    - Verify transaction rolls back with zero assertion exceptions.

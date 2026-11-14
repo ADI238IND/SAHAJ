@@ -328,4 +328,56 @@ describe("Health & Readiness evaluation", () => {
     expect(jsonStr).not.toContain("Unhandled network error");
     expect(jsonStr).not.toContain("secret:pass");
   });
+
+  it("aborts readiness evaluation immediately with 503 timeout when external abortSignal is already aborted", async () => {
+    const probeFn = vi.fn();
+    const deps: ReadinessDependencies = {
+      isConfigured: () => true,
+      probeDatabase: probeFn
+    };
+
+    const res = await evaluateReadiness(deps, {
+      ...options,
+      abortSignal: AbortSignal.abort()
+    });
+
+    expect(res.httpStatus).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe("degraded");
+    expect(res.body.database?.status).toBe("timeout");
+    expect(res.body.database?.code).toBe("database_timeout");
+    expect(probeFn).not.toHaveBeenCalled();
+  });
+
+  it("cancels probe and returns 503 timeout when external abortSignal fires mid-probe", async () => {
+    let probeCancelled = false;
+    const abortCtrl = new AbortController();
+
+    const deps: ReadinessDependencies = {
+      isConfigured: () => true,
+      probeDatabase: (_timeoutMs, abortSignal) => {
+        if (abortSignal) {
+          abortSignal.addEventListener("abort", () => {
+            probeCancelled = true;
+          });
+        }
+        return new Promise<DatabaseProbeResult>(() => {});
+      }
+    };
+
+    const readinessPromise = evaluateReadiness(deps, {
+      ...options,
+      abortSignal: abortCtrl.signal
+    });
+
+    abortCtrl.abort();
+
+    const res = await readinessPromise;
+    expect(res.httpStatus).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe("degraded");
+    expect(res.body.database?.status).toBe("timeout");
+    expect(res.body.database?.code).toBe("database_timeout");
+    expect(probeCancelled).toBe(true);
+  });
 });

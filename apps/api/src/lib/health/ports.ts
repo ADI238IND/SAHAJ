@@ -42,6 +42,15 @@ export async function probeRealDatabase(
     };
   }
 
+  if (externalSignal?.aborted) {
+    return {
+      ok: false,
+      status: "timeout",
+      code: "database_timeout",
+      latencyMs: 0
+    };
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
@@ -49,12 +58,8 @@ export async function probeRealDatabase(
 
   let onExternalAbort: (() => void) | undefined;
   if (externalSignal) {
-    if (externalSignal.aborted) {
-      controller.abort();
-    } else {
-      onExternalAbort = () => controller.abort();
-      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
-    }
+    onExternalAbort = () => controller.abort();
+    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
   }
 
   const startTime = Date.now();

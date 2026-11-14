@@ -18,10 +18,30 @@ export const DEFAULT_DATABASE_TIMEOUT_MS = 3000;
  */
 export async function evaluateReadiness(
   deps: ReadinessDependencies,
-  options?: { timeoutMs?: number; now?: () => Date }
+  options?: { timeoutMs?: number; now?: () => Date; abortSignal?: AbortSignal }
 ): Promise<HealthCheckResult> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_DATABASE_TIMEOUT_MS;
   const now = options?.now ? options.now() : new Date();
+
+  // If external abort signal is already aborted
+  if (options?.abortSignal?.aborted) {
+    const body: HealthResponse = {
+      ok: false,
+      status: "degraded",
+      service: "sahaj-core1-api",
+      stage: "phase-1-foundation",
+      probe: "readiness",
+      database: {
+        status: "timeout",
+        code: "database_timeout"
+      },
+      voice: "disabled",
+      care_actions: "disabled",
+      emergency_ready: false,
+      timestamp: now.toISOString()
+    };
+    return { httpStatus: 503, body };
+  }
 
   // 1. Dependency check: Configuration (fail safely on exceptions)
   let isConfigured = false;
@@ -53,6 +73,7 @@ export async function evaluateReadiness(
   // 2. Bounded probe execution with independent deadline and timer clearance
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onExternalAbort: (() => void) | undefined;
 
   let probe: DatabaseProbeResult;
   try {
@@ -65,6 +86,18 @@ export async function evaluateReadiness(
           code: "database_timeout"
         });
       }, timeoutMs);
+
+      if (options?.abortSignal) {
+        onExternalAbort = () => {
+          controller.abort();
+          resolve({
+            ok: false,
+            status: "timeout",
+            code: "database_timeout"
+          });
+        };
+        options.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
+      }
     });
 
     const probePromise = deps.probeDatabase(timeoutMs, controller.signal);
@@ -79,6 +112,9 @@ export async function evaluateReadiness(
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
+    }
+    if (options?.abortSignal && onExternalAbort) {
+      options.abortSignal.removeEventListener("abort", onExternalAbort);
     }
   }
 

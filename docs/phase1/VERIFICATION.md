@@ -19,8 +19,8 @@ pnpm --filter @sahaj/api test
 pnpm --filter @sahaj/api build
 ```
 
-### Local Test Coverage Summary (26 Health Tests):
-- `tests/health/readiness.test.ts` (13 tests):
+### Local Test Coverage Summary (31 Health Tests):
+- `tests/health/readiness.test.ts` (15 tests):
   - Database unconfigured / unavailable (HTTP 503 `database_not_configured`)
   - Safe failure when `isConfigured` throws an exception (HTTP 503 without leaking error details)
   - Configured but unreachable (HTTP 503 `database_unreachable`)
@@ -34,7 +34,9 @@ pnpm --filter @sahaj/api build
   - Disabled care actions (`emergency_ready: false`, `care_actions: "disabled"`, `voice: "disabled"`)
   - Liveness vs readiness distinction (liveness 200 vs readiness 503)
   - Unhandled exception containment in probe calls
-- `tests/health/ports.test.ts` (8 tests):
+  - **Abort handling**: Immediate 503 timeout return when external `abortSignal` is already aborted
+  - **Abort handling**: Bounded probe cancelled and resolved to 503 timeout when external `abortSignal` aborts mid-probe
+- `tests/health/ports.test.ts` (10 tests):
   - Configuration detection from environment variables
   - Successful RPC call consuming `public.foundation_readiness()` JSON contract (`{ database: 'connected', schema_ready: true, schema_version: 'foundation-v4' }`)
   - Missing schema detection when RPC returns `schema_ready = false`
@@ -43,14 +45,17 @@ pnpm --filter @sahaj/api build
   - SDK abort `{ error }` response recognized as `database_timeout`
   - Thrown SDK `AbortError` recognized as `database_timeout`
   - Network failure (ECONNREFUSED / fetch failure) recognized as `database_unreachable`
-- `tests/health/routes.test.ts` (5 tests):
+  - **Abort handling**: Immediate timeout return when `externalSignal` is already aborted (zero Supabase calls made)
+  - **Abort handling**: Timeout returned and internal query aborted when `externalSignal` fires mid-call
+- `tests/health/routes.test.ts` (6 tests):
   - `GET /api/health?probe=liveness` returns 200 with `Cache-Control: no-store`
   - `GET /api/health` defaults to readiness probe and returns 200 when ready
   - `GET /api/health` returns 503 when readiness probe fails
   - `GET /api/health/liveness` dedicated route returns 200 with `no-store`
   - `GET /api/health/readiness` dedicated route returns 503 when dependency fails
+  - `GET /api/health` with aborted request signal returns 503 timeout with `no-store` header
 
-Total API test suite: 202 tests passing across 15 test files.
+Total API test suite: 207 tests passing across 15 test files.
 
 ---
 
@@ -65,7 +70,7 @@ Total API test suite: 202 tests passing across 15 test files.
     "schema_version": "foundation-v4"
   }
   ```
-- **Parent Dependency**: Parent will provide the exact readiness migration filename for `public.foundation_readiness()`.
+- **Migration Version**: Version `20261114150944` (`infra/supabase/migrations/20261114150944_foundation_readiness.sql`). Applied remotely by parent; parent owns reconciling that migration into integration.
 - **Defensive Handling**: The API treats any missing RPC, invalid version, unparseable payload, or `schema_ready: false` as HTTP 503 `missing_schema`.
 
 ---
@@ -88,10 +93,10 @@ psql "$SUPABASE_DB_URL" -f infra/supabase/tests/phase1_security_acceptance.sql
 **Key Assertions Verified**:
 1. Non-vacuous table existence: All 33 tables across `public`, `sahaj_private`, and `sahaj_checkpoints` must exist before checking RLS.
 2. All 33 tables have `relrowsecurity = true`.
-3. Schema isolation: `anon` has no USAGE on `sahaj_private`; PUBLIC (grantee = 0) has no USAGE/CREATE on `sahaj_private`; `authenticated` USAGE is preserved for `has_role`/`is_person` RLS helpers; browser roles have zero direct table privileges on `call_content`, `voice_content`, or `private_items`.
+3. Schema isolation: `anon` has no USAGE on `sahaj_private`; PUBLIC (grantee = 0) has no USAGE/CREATE on `sahaj_private`; `authenticated` USAGE is preserved for `has_role`/`is_person` RLS helpers; browser roles have zero direct table privileges on `call_content`, `voice_content`, or `private_items`. RLS helper signatures in `sahaj_private` are validated and confirmed executable by `authenticated` and denied to `anon`.
 4. Storage buckets: All 3 care buckets (`sahaj-voice`, `sahaj-recordings`, `sahaj-lines`) must exist AND be private (`public = false`).
 5. Checkpoint least privilege: `sahaj_atlas_runtime` lacks database CREATE, lacks application table access, and `sahaj_checkpoints` has exactly 4 tables.
-6. Non-vacuous RPC existence: All 13 service-only RPCs must exist; neither `anon`, `authenticated`, nor `PUBLIC` has EXECUTE; only `service_role` has EXECUTE.
+6. Non-vacuous RPC existence & exact signatures: All 14 service-only RPC signatures (including `foundation_readiness()`) must exist via `to_regprocedure`; neither `anon`, `authenticated`, nor `PUBLIC` has EXECUTE; only `service_role` has EXECUTE. Direct execution denial tested under both `anon` and `authenticated`.
 7. Tenant boundary fixtures: Validates anonymous default deny, Family A vs Family B isolation, intra-tenant role fencing, and immediate revocation cutoff.
 8. Rolls back cleanly with zero persistent residue.
 
@@ -102,7 +107,7 @@ psql "$SUPABASE_DB_URL" -f infra/supabase/tests/phase1_security_acceptance.sql
 To verify the deployed API without reading or logging sensitive tokens or environment variables, execute `docs/phase1/verify_live.sh` or `docs/phase1/verify_live.ps1`.
 
 ### Explicit Remaining Live Readiness Evidence:
-1. Apply the parent's `foundation_readiness()` migration.
+1. Reconcile parent's remote migration `infra/supabase/migrations/20261114150944_foundation_readiness.sql` (recorded version `20261114150944`) into integration.
 2. Run `infra/supabase/tests/phase1_security_acceptance.sql` against the connected Supabase database.
 3. Deploy the integration commit to Vercel.
 4. Verify protected `GET /api/health` returns HTTP 200 with `database.status = "connected"` and `database.schema = "present"`.

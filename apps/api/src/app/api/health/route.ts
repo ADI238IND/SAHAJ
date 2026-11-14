@@ -25,7 +25,9 @@ export async function GET(req: Request) {
     });
   }
 
-  const readiness = await evaluateReadiness(defaultReadinessDependencies);
+  const readiness = await evaluateReadiness(defaultReadinessDependencies, {
+    abortSignal: req.signal
+  });
   return NextResponse.json(readiness.body, {
     status: readiness.httpStatus,
     headers: { "Cache-Control": "no-store" }

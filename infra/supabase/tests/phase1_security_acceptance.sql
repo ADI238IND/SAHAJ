@@ -80,6 +80,11 @@ begin
     raise exception 'FAIL sahaj_private schema USAGE granted to anon';
   end if;
 
+  -- Authenticated role intentionally preserves USAGE on sahaj_private for has_role/is_person RLS helpers.
+  if not has_schema_privilege('authenticated', 'sahaj_private', 'USAGE') then
+    raise exception 'FAIL sahaj_private schema USAGE missing for authenticated (needed for RLS helpers)';
+  end if;
+
   -- PUBLIC (ACL pseudo-role, grantee=0) must have NO USAGE or CREATE on sahaj_private
   if exists (
     select 1
@@ -103,6 +108,30 @@ begin
       end loop;
     end loop;
   end loop;
+
+  -- Assert required RLS helpers exist with exact signatures
+  if to_regprocedure('sahaj_private.has_role(uuid,text[])') is null then
+    raise exception 'FAIL RLS helper sahaj_private.has_role(uuid,text[]) missing';
+  end if;
+  if to_regprocedure('sahaj_private.is_person(uuid,uuid)') is null then
+    raise exception 'FAIL RLS helper sahaj_private.is_person(uuid,uuid) missing';
+  end if;
+
+  -- authenticated must have EXECUTE on RLS helpers
+  if not has_function_privilege('authenticated', 'sahaj_private.has_role(uuid,text[])', 'EXECUTE') then
+    raise exception 'FAIL authenticated lacks EXECUTE on sahaj_private.has_role(uuid,text[])';
+  end if;
+  if not has_function_privilege('authenticated', 'sahaj_private.is_person(uuid,uuid)', 'EXECUTE') then
+    raise exception 'FAIL authenticated lacks EXECUTE on sahaj_private.is_person(uuid,uuid)';
+  end if;
+
+  -- anon must NOT have EXECUTE on RLS helpers
+  if has_function_privilege('anon', 'sahaj_private.has_role(uuid,text[])', 'EXECUTE') then
+    raise exception 'FAIL anon has EXECUTE on sahaj_private.has_role(uuid,text[])';
+  end if;
+  if has_function_privilege('anon', 'sahaj_private.is_person(uuid,uuid)', 'EXECUTE') then
+    raise exception 'FAIL anon has EXECUTE on sahaj_private.is_person(uuid,uuid)';
+  end if;
 
   -- 2B. sahaj_checkpoints schema privilege assertions:
   -- Untrusted browser roles must have NO USAGE on sahaj_checkpoints
@@ -181,65 +210,61 @@ end $$;
 -- ============================================================================
 do $$
 declare
-  expected_rpcs text[] := array[
-    'get_voice_media_metadata',
-    'get_call_media_metadata',
-    'ingest_raw_event',
-    'claim_raw_events',
-    'finish_raw_event',
-    'dispatch_raw_event',
-    'claim_outbox',
-    'finish_outbox',
-    'reconcile_outbox',
-    'claim_workflow_jobs',
-    'finish_workflow_job',
-    'resume_workflow_job',
-    'append_timeline_event'
+  expected_rpc_signatures text[] := array[
+    'public.get_voice_media_metadata(uuid,uuid)',
+    'public.get_call_media_metadata(uuid,uuid)',
+    'public.ingest_raw_event(text,text,text,uuid,jsonb,text,text)',
+    'public.claim_raw_events(text,integer,integer)',
+    'public.finish_raw_event(uuid,uuid,boolean,text)',
+    'public.dispatch_raw_event(uuid,uuid,text,text)',
+    'public.claim_outbox(text,integer,integer)',
+    'public.finish_outbox(uuid,uuid,boolean,text)',
+    'public.reconcile_outbox(uuid,uuid,text)',
+    'public.claim_workflow_jobs(text,integer,integer)',
+    'public.finish_workflow_job(uuid,uuid,text,text,text)',
+    'public.resume_workflow_job(uuid,uuid,text,text)',
+    'public.append_timeline_event(jsonb,text,text,text)',
+    'public.foundation_readiness()'
   ];
   missing_rpcs text[];
-  fn record;
+  sig text;
+  fn_oid regprocedure;
+  p record;
   forbidden_exec text[];
 begin
-  -- 1. Assert all required service-only RPCs actually exist
-  select array_agg(req_rpc) into missing_rpcs
-  from unnest(expected_rpcs) as req_rpc
-  where not exists (
-    select 1
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname = req_rpc
-  );
+  -- 1. Assert all required service-only RPC signatures actually exist before checking ACLs
+  select array_agg(req_sig) into missing_rpcs
+  from unnest(expected_rpc_signatures) as req_sig
+  where to_regprocedure(req_sig) is null;
 
   if missing_rpcs is not null and array_length(missing_rpcs, 1) > 0 then
-    raise exception 'FAIL Required service-only RPCs missing: %', array_to_string(missing_rpcs, ', ');
+    raise exception 'FAIL Required service-only RPC signatures missing: %', array_to_string(missing_rpcs, ', ');
   end if;
 
   -- 2. Verify execution privileges across anon, authenticated, PUBLIC, and service_role
-  for fn in
-    select p.proname, oidvectortypes(p.proargtypes) as args, p.proacl, p.proowner
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname = any(expected_rpcs)
-  loop
-    if has_function_privilege('anon', 'public.' || fn.proname || '(' || fn.args || ')', 'EXECUTE') then
-      forbidden_exec := array_append(forbidden_exec, 'anon can execute ' || fn.proname);
+  foreach sig in array expected_rpc_signatures loop
+    fn_oid := to_regprocedure(sig);
+
+    if has_function_privilege('anon', sig, 'EXECUTE') then
+      forbidden_exec := array_append(forbidden_exec, 'anon can execute ' || sig);
     end if;
 
-    if has_function_privilege('authenticated', 'public.' || fn.proname || '(' || fn.args || ')', 'EXECUTE') then
-      forbidden_exec := array_append(forbidden_exec, 'authenticated can execute ' || fn.proname);
+    if has_function_privilege('authenticated', sig, 'EXECUTE') then
+      forbidden_exec := array_append(forbidden_exec, 'authenticated can execute ' || sig);
     end if;
 
     -- Inspect PUBLIC (ACL pseudo-role, grantee=0) through aclexplode
+    select proacl, proowner into p from pg_proc where oid = fn_oid::oid;
     if exists (
       select 1
-      from aclexplode(coalesce(fn.proacl, acldefault('f'::"char", fn.proowner))) acl
+      from aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) acl
       where acl.grantee = 0 and acl.privilege_type = 'EXECUTE'
     ) then
-      forbidden_exec := array_append(forbidden_exec, 'PUBLIC can execute ' || fn.proname);
+      forbidden_exec := array_append(forbidden_exec, 'PUBLIC can execute ' || sig);
     end if;
 
-    if not has_function_privilege('service_role', 'public.' || fn.proname || '(' || fn.args || ')', 'EXECUTE') then
-      raise exception 'FAIL service_role cannot execute %', fn.proname;
+    if not has_function_privilege('service_role', sig, 'EXECUTE') then
+      raise exception 'FAIL service_role cannot execute %', sig;
     end if;
   end loop;
 
@@ -359,6 +384,22 @@ begin
     perform * from sahaj_private.private_items;
     raise exception 'FAIL anon can select sahaj_private.private_items';
   exception when insufficient_privilege then null; end;
+
+  -- Anon denied execution of service-only RPCs
+  begin
+    perform public.foundation_readiness();
+    raise exception 'FAIL anon can execute foundation_readiness';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    perform public.get_voice_media_metadata('b1000000-0000-4000-8000-000000000001'::uuid, 'c1000000-0000-4000-8000-000000000001'::uuid);
+    raise exception 'FAIL anon can execute get_voice_media_metadata';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    perform public.get_call_media_metadata('b1000000-0000-4000-8000-000000000001'::uuid, 'd1000000-0000-4000-8000-000000000001'::uuid);
+    raise exception 'FAIL anon can execute get_call_media_metadata';
+  exception when insufficient_privilege then null; end;
 end $$;
 reset role;
 
@@ -420,6 +461,22 @@ begin
   begin
     perform * from sahaj_private.private_items;
     raise exception 'FAIL Client selected sahaj_private.private_items';
+  exception when insufficient_privilege then null; end;
+
+  -- Authenticated denied execution of service-only RPCs
+  begin
+    perform public.foundation_readiness();
+    raise exception 'FAIL authenticated can execute foundation_readiness';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    perform public.get_voice_media_metadata('b1000000-0000-4000-8000-000000000001'::uuid, 'c1000000-0000-4000-8000-000000000001'::uuid);
+    raise exception 'FAIL authenticated can execute get_voice_media_metadata';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    perform public.get_call_media_metadata('b1000000-0000-4000-8000-000000000001'::uuid, 'd1000000-0000-4000-8000-000000000001'::uuid);
+    raise exception 'FAIL authenticated can execute get_call_media_metadata';
   exception when insufficient_privilege then null; end;
 end $$;
 reset role;

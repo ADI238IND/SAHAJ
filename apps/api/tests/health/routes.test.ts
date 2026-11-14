@@ -107,4 +107,25 @@ describe("Health API Route Handlers", () => {
     expect(data.database?.status).toBe("timeout");
     expect(data.database?.code).toBe("database_timeout");
   });
+
+  it("GET /api/health with aborted request signal returns 503 timeout with no-store header", async () => {
+    vi.mocked(defaultReadinessDependencies.isConfigured).mockReturnValue(true);
+
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const req = new Request("http://localhost:3000/api/health", {
+      signal: abortController.signal
+    });
+
+    const res = await healthRoute(req);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+
+    const data = await res.json();
+    expect(data.ok).toBe(false);
+    expect(data.status).toBe("degraded");
+    expect(data.database?.status).toBe("timeout");
+    expect(data.database?.code).toBe("database_timeout");
+  });
 });

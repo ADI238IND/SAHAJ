@@ -193,4 +193,50 @@ describe("probeRealDatabase port logic", () => {
     expect(result.status).toBe("unreachable");
     expect(result.code).toBe("database_unreachable");
   });
+
+  it("reports timeout when externalSignal is already aborted", async () => {
+    process.env.SUPABASE_URL = "https://synthetic-test.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "synthetic-service-role-key";
+
+    const abortedSignal = AbortSignal.abort();
+    const result = await probeRealDatabase(500, abortedSignal);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("timeout");
+    expect(result.code).toBe("database_timeout");
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("reports timeout and aborts when externalSignal fires during call", async () => {
+    process.env.SUPABASE_URL = "https://synthetic-test.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "synthetic-service-role-key";
+
+    const abortController = new AbortController();
+
+    const mockRpc = vi.fn().mockReturnValue({
+      abortSignal: vi.fn().mockImplementation((signal: AbortSignal) => {
+        return new Promise((_, reject) => {
+          signal.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      })
+    });
+
+    vi.mocked(createClient).mockReturnValue({
+      rpc: mockRpc
+    } as unknown as ReturnType<typeof createClient>);
+
+    const probePromise = probeRealDatabase(1000, abortController.signal);
+
+    // Abort externally
+    abortController.abort();
+
+    const result = await probePromise;
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("timeout");
+    expect(result.code).toBe("database_timeout");
+  });
 });
