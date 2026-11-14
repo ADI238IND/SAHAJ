@@ -17,3 +17,11 @@ Remaining Phase1 closure: Antigravity bounded readiness implementation and failu
 Parent ran API typecheck, full API tests and production build in antigravity-foundation on2026-11-14 around21:01 IST:204 tests passed across15 files (readiness15, ports8, routes5), typecheck and build passed. This exceeds the worker's earlier202-test report by2 readiness regressions. The worktree contained uncommitted edits over tip26aa605; this is a tested working-tree snapshot, not final commit acceptance.
 
 Parent executed that worktree's phase1_security_acceptance.sql against the connected Supabase project: passed, fixtures rolled back. Existing private-schema helper USAGE was preserved. Final worker checkpoint, independent review of any subsequent edits, integration and actual local/deployed readiness remain pending. Do not attribute the new tests to the currently deployed465fe55.
+
+## Final IDE/App integration validation
+
+Integrated IDE8133cf0/26aa605/f1ddedc as e303460/66ffa7e/abc2697; AppQAe862b75 as4da18ec. Frozen install, every package typecheck,372 tests (API237, adapters72, gate39, Atlas24) and production build passed. AppQA30/30 passes on the integrated source; its old18 failures against8133cf0 remain historical only.
+
+Real local production server at127.0.0.1:3101 passed all4 routes: /api/health?probe=liveness, /api/health, /api/health/liveness, /api/health/readiness. All200/no-store/emergency_ready=false; readinessdatabase.status=connected/schema=present. The sandboxed3100 server instead safely reported503/database_unreachable while retaining200liveness; network-enabled verification confirms healthy real connectivity.
+
+Latest committed IDE and App SQL suites both contain one incorrect5argument catalog signature for finish_workflow_job, whose actual declared/live identity has6arguments. Both complete hosted rollback suites PASS diagnostically when that expected signature alone is corrected in memory. Original committed suites are NOT yet accepted as passed. Worker correction and smoke-script liveness update assigned in coordination/PHASE1-FINAL-TEST-CORRECTION.md. Final deployment checks remain pending; Phase1 not100%yet.

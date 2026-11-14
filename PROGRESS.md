@@ -4,7 +4,7 @@ Updated 2026-11-14. Estimates measure reviewed implementation and integration, n
 
 | Phase | Scope | Coding complete |
 | --- | --- | --- |
-| 1 | Build, API foundation, schema, RLS, private storage | 90% |
+| 1 | Build, API foundation, schema, RLS, private storage | 95% |
 | 2 | Provider adapters and verified durable webhook ingestion | 65% |
 | 3 | Atlas, Cedar, signed timeline and durable orchestration | 50% |
 | 4 | Integrated Core 1 check-ins, urgent responder, voice, medicines, nudges and reports | 0% |
@@ -44,5 +44,7 @@ GitHub staging visibility rechecked through the connected API on2026-11-14: publ
 Commander workflow: Antigravity IDE implements Phase1; Antigravity App authors independent QA; KiroA implements Phase2; KiroB implements Phase3. Codex tests, reviews, coordinates contracts, integrates and checkpoints, returning defects to the owning worker. Phases4 then5 start only after earlier phase acceptance. No worker merges or deploys independently.
 
 Readiness migration20261114150944 applied and live RPC verified database=connected/schema_ready=true/schema_version=foundation-v4. Antigravity health changes still require final independent tests, integration and deployment. KiroPhase2 second-pass tip9b192ac and KiroPhase3 tip03a5bb7 remain unmerged pending documented review fixes; both CLI lanes resumed. These unaccepted commits do not raise percentages.
+
+Phase1 IDE and App QA now integrated through4da18ec:372tests, alltypechecks/frozeninstall/productionbuild passed, including30independentQA tests. Real local readiness and liveness all200/no-store with realSupabaseconnected/schema present and emergencyfalse. Final deployed probes and worker corrections to two SQL expected signatures/smoke script remain before100%. Full diagnostic rollback SQL checks pass with only the expected signature corrected in memory; original committed SQL tests remain red until worker fixes land.
 
 Next: complete combined validation and push checkpoint; integrate reviewed Antigravity work; wire media Cedar and durable Atlas repository/outbox, atomic permission usage/nonce consumption, provider attempt/call/consent writers, and recording retrieval worker. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.
