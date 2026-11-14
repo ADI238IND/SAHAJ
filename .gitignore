@@ -21,3 +21,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 *.tsbuildinfo
+
+# Parallel development worktrees
+.worktrees/

@@ -2,4 +2,5 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
-  esbuild: set this to true or false
+  # Reviewed postinstall selects and verifies the platform binary. Re-review on upgrade.
+  esbuild@0.28.2: true
