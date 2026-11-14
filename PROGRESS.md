@@ -49,4 +49,6 @@ Phase1 IDE and App QA now integrated through4da18ec:372tests, alltypechecks/froz
 
 Latest accepted Phase1 closure supersedes the pending snapshots above: both corrected on-disk hosted rollback SQL acceptance suites pass, the liveness/authentication smoke script passes, and deployment dpl_7rS4QWUJ3n5eeGJMrL8sCHR28UdV at integration commit006f173 returns200/no-store on all four protected health routes. Default readiness reports database connected/schema present/emergency_ready=false. Foundation implementation is complete; this does not certify provider calls or emergency workflows.
 
+Final release b1904b2 is also pushed/deployed READY as dpl_4b7Xinef1LEeWPKe8qjg3oykCb81; all four protected health routes reverified200/no-store at16:40Z. Kiro Phase2/3 were relaunched separately with final review instructions in PHASE2-FOURTH-PASS.md and PHASE3-FOURTH-PASS.md. These review handoffs are coordination artifacts and do not change the accepted release runtime.
+
 Next: return final cross-lane defects to Kiro Phase2/3, then validate their combined migrations and real producer/consumer path before integration. Their accepted percentages remain65%/50%; worker commits alone do not raise them. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.

@@ -28,4 +28,6 @@ The initial SQL suites expected a5argument catalog signature for finish_workflow
 
 ## Phase1 acceptance complete
 
+Final release checkpoint b1904b2a765c83f9e44b243036fb119f5a5eee1b is pushed and deployed as dpl_4b7Xinef1LEeWPKe8qjg3oykCb81 (READY). At2026-11-14T16:40Z, all four protected health routes again returned200/no-store. Default readiness returned connected/present/emergency_ready=false. This final release includes the corrected SQL expectations and liveness smoke script; the earlier006f173 evidence below remains a historical integration check.
+
 Deployment dpl_7rS4QWUJ3n5eeGJMrL8sCHR28UdV, integration commit006f173491f5d074955f20e0564ffd0b906674bc, is READY. Protected fetches of all four health routes returned200 and Cache-Control:no-store. Default and dedicated readiness reported database.status=connected, database.schema=present, emergency_ready=false; voice/care actions remain disabled. Migration20261114150944 is reconciled in Git and hosted migration history; its live readiness RPC reports foundation-v4/schema_ready=true. Phase1 coding and foundation acceptance are100%; provider and emergency acceptance belong to later phases.
