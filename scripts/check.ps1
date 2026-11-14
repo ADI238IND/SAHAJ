@@ -1,12 +1,15 @@
+param([string]$BaseUrl = 'http://localhost:3000')
+
 $ErrorActionPreference = 'Stop'
-Write-Host 'Checking Sahaj local API http://localhost:3000 ...'
-$health = Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -Method Get
+$probeBaseUrl = $BaseUrl.TrimEnd('/')
+Write-Host "Checking Sahaj API liveness at $probeBaseUrl ..."
+$health = Invoke-RestMethod -Uri ($probeBaseUrl + '/api/health?probe=liveness') -Method Get
 if (-not $health.ok -or $health.emergency_ready) { throw 'Unexpected health response' }
 Write-Host 'PASS: API process is running (emergency features not ready)'
 
 foreach ($route in @('/api/sarvam/tool/ping', '/api/cron/tick')) {
   try {
-    Invoke-WebRequest -Uri ('http://localhost:3000' + $route) -Method Post -UseBasicParsing | Out-Null
+    Invoke-WebRequest -Uri ($probeBaseUrl + $route) -Method Post -UseBasicParsing | Out-Null
     throw "FAIL: $route accepted a request with no secret"
   } catch {
     $status = [int]$_.Exception.Response.StatusCode
@@ -14,4 +17,4 @@ foreach ($route in @('/api/sarvam/tool/ping', '/api/cron/tick')) {
     Write-Host "PASS: $route blocks missing credentials ($status)"
   }
 }
-Write-Host 'Scaffold smoke checks passed. DB, voice, and event processing still require implementation.'
+Write-Host 'Liveness and unauthenticated-route checks passed. Verify database readiness separately.'

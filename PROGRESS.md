@@ -4,7 +4,7 @@ Updated 2026-11-14. Estimates measure reviewed implementation and integration, n
 
 | Phase | Scope | Coding complete |
 | --- | --- | --- |
-| 1 | Build, API foundation, schema, RLS, private storage | 95% |
+| 1 | Build, API foundation, schema, RLS, private storage | 100% |
 | 2 | Provider adapters and verified durable webhook ingestion | 65% |
 | 3 | Atlas, Cedar, signed timeline and durable orchestration | 50% |
 | 4 | Integrated Core 1 check-ins, urgent responder, voice, medicines, nudges and reports | 0% |
@@ -47,4 +47,6 @@ Readiness migration20261114150944 applied and live RPC verified database=connect
 
 Phase1 IDE and App QA now integrated through4da18ec:372tests, alltypechecks/frozeninstall/productionbuild passed, including30independentQA tests. Real local readiness and liveness all200/no-store with realSupabaseconnected/schema present and emergencyfalse. Final deployed probes and worker corrections to two SQL expected signatures/smoke script remain before100%. Full diagnostic rollback SQL checks pass with only the expected signature corrected in memory; original committed SQL tests remain red until worker fixes land.
 
-Next: complete combined validation and push checkpoint; integrate reviewed Antigravity work; wire media Cedar and durable Atlas repository/outbox, atomic permission usage/nonce consumption, provider attempt/call/consent writers, and recording retrieval worker. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.
+Latest accepted Phase1 closure supersedes the pending snapshots above: both corrected on-disk hosted rollback SQL acceptance suites pass, the liveness/authentication smoke script passes, and deployment dpl_7rS4QWUJ3n5eeGJMrL8sCHR28UdV at integration commit006f173 returns200/no-store on all four protected health routes. Default readiness reports database connected/schema present/emergency_ready=false. Foundation implementation is complete; this does not certify provider calls or emergency workflows.
+
+Next: return final cross-lane defects to Kiro Phase2/3, then validate their combined migrations and real producer/consumer path before integration. Their accepted percentages remain65%/50%; worker commits alone do not raise them. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.

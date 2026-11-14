@@ -287,7 +287,7 @@ declare
     'public.finish_outbox(uuid,uuid,boolean,text)',
     'public.reconcile_outbox(uuid,uuid,text)',
     'public.claim_workflow_jobs(text,integer,integer)',
-    'public.finish_workflow_job(uuid,uuid,text,text,text)',
+    'public.finish_workflow_job(uuid,uuid,text,text,text,text)',
     'public.resume_workflow_job(uuid,uuid,text,text)',
     'public.append_timeline_event(jsonb,text,text,text)',
     'public.foundation_readiness()'
