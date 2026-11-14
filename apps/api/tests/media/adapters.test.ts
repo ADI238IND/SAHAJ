@@ -1,17 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { defaultMediaDeps, supabaseAuth, supabaseRepository, supabaseStorage } from "../../src/lib/media/supabase";
+import { CONSENT_HISTORY_LIMIT, defaultMediaDeps, supabaseAuth, supabaseRepository, supabaseStorage } from "../../src/lib/media/supabase";
 
 const F = "00000000-0000-4000-8000-000000000001", P = "00000000-0000-4000-8000-000000000030", U = "00000000-0000-4000-8000-000000000020";
 type Result = { data: unknown; error: unknown };
 
 /** Minimal chainable stand-in for the parts of the Supabase client the adapters use. */
-function fakeDb(config: { tables?: Record<string, Result>; rpc?: Record<string, Result>; user?: Result; info?: Result; signed?: Result } = {}) {
+function fakeDb(config: { rows?: Record<string, Array<Record<string, unknown>>>; tables?: Record<string, Result>; rpc?: Record<string, Result>; user?: Result; info?: Result; signed?: Result } = {}) {
   const calls: { table?: string; ops: Array<[string, ...unknown[]]>; rpc?: [string, unknown]; auth?: string; storage?: Array<[string, ...unknown[]]> }[] = [];
   const db = {
     from(table: string) {
       const entry = { table, ops: [] as Array<[string, ...unknown[]]> }; calls.push(entry);
-      const result = () => Promise.resolve(config.tables?.[table] ?? { data: null, error: null });
+      const result = () => {
+        const rows = config.rows?.[table];
+        if (!rows) return Promise.resolve(config.tables?.[table] ?? { data: null, error: null });
+        // In-memory evaluation of the recorded filters, so tests exercise real query semantics.
+        let out = rows.filter((r) => entry.ops.every(([op, col, val]) => op === "eq" ? r[col as string] === val : op === "is" ? r[col as string] === val : true));
+        const order = entry.ops.find((o) => o[0] === "order");
+        if (order) out = [...out].sort((a, b) => String(b[order[1] as string]).localeCompare(String(a[order[1] as string])));
+        const limit = entry.ops.find((o) => o[0] === "limit");
+        if (limit) out = out.slice(0, limit[1] as number);
+        return Promise.resolve({ data: out, error: null });
+      };
       const b: Record<string, unknown> = {};
       for (const op of ["select", "eq", "is", "order", "limit"]) b[op] = (...a: unknown[]) => { entry.ops.push([op, ...a]); return b; };
       b.maybeSingle = () => { entry.ops.push(["maybeSingle"]); return result(); };
@@ -68,6 +78,14 @@ describe("supabaseRepository", () => {
     expect(ops).toContainEqual(["eq", "person_id", P]);
     expect(ops).toContainEqual(["eq", "purpose", "call_recording"]);
     await expect(supabaseRepository(fakeDb({ tables: { consents: { data: null, error: { message: "x" } } } }).db).listConsentHistory(F, P, "p")).rejects.toThrow("db_error");
+  });
+  it("rejects non-uuid or oversized filter values before querying", async () => {
+    const { db, calls } = fakeDb();
+    const repo = supabaseRepository(db);
+    await expect(repo.listConsentHistory("x,or=(1=1)", P, "p")).rejects.toThrow("bad_filter");
+    await expect(repo.listConsentHistory(F, P, "p", "not-a-uuid")).rejects.toThrow("bad_filter");
+    await expect(repo.listConsentHistory(F, P, "x".repeat(201))).rejects.toThrow("bad_filter");
+    expect(calls).toEqual([]);
   });
   it("calls the voice metadata RPC with exact arguments and maps the object", async () => {
     const { db, calls } = fakeDb({ rpc: { get_voice_media_metadata: { data: { family_id: F, voice_post_id: P, object_path: `${F}/a.mp3`, expires_at: "2026-12-01T00:00:00Z" }, error: null } } });
@@ -128,5 +146,41 @@ describe("default production wiring", () => {
     const deps = defaultMediaDeps();
     const ctx = { action: "read_voice_media", familyId: F } as never;
     expect(await deps.authorizeMedia(ctx)).toBe("deny");
+  });
+});
+
+describe("call-scoped consent history queries", () => {
+  const A = "00000000-0000-4000-8000-0000000000a1", B = "00000000-0000-4000-8000-0000000000b1";
+  const row = (i: number, o: Record<string, unknown>) => ({ id: `c${i}`, family_id: F, person_id: P, call_id: A, purpose: "call_recording", answer: true, version: "v1", created_at: new Date(Date.UTC(2026, 10, 1) + i * 1000).toISOString(), ...o });
+  const many = Array.from({ length: CONSENT_HISTORY_LIMIT + 50 }, (_, i) => row(1000 + i, { id: `other${i}`, call_id: B }));
+  const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id).sort();
+
+  it("an old call-A grant is still returned when 250 newer unrelated call grants exist", async () => {
+    const { db } = fakeDb({ rows: { consents: [row(1, { id: "A-yes" }), ...many] } });
+    expect(ids(await supabaseRepository(db).listConsentHistory(F, P, "call_recording", A))).toEqual(["A-yes"]);
+  });
+  it("loads exact call rows and global refusals only, never global grants or other calls", async () => {
+    const { db, calls } = fakeDb({ rows: { consents: [
+      row(1, { id: "A-yes" }), row(2, { id: "A-no", answer: false }), row(3, { id: "G-no", call_id: null, answer: false }),
+      row(4, { id: "G-yes", call_id: null }), row(5, { id: "B-yes", call_id: B }),
+      row(6, { id: "other-person", person_id: B }), row(7, { id: "other-purpose", purpose: "x" }), row(8, { id: "other-family", family_id: B }),
+    ] } });
+    expect(ids(await supabaseRepository(db).listConsentHistory(F, P, "call_recording", A))).toEqual(["A-no", "A-yes", "G-no"]);
+    const queries = calls.filter((c) => c.table === "consents");
+    expect(queries).toHaveLength(2);
+    for (const q of queries) {
+      expect(q.ops).toContainEqual(["eq", "family_id", F]);
+      expect(q.ops).toContainEqual(["eq", "person_id", P]);
+      expect(q.ops).toContainEqual(["eq", "purpose", "call_recording"]);
+    }
+  });
+  it("fails closed when a result page is full (possible truncation)", async () => {
+    const rows = Array.from({ length: CONSENT_HISTORY_LIMIT }, (_, i) => row(i, { id: `a${i}` }));
+    await expect(supabaseRepository(fakeDb({ rows: { consents: rows } }).db).listConsentHistory(F, P, "call_recording", A)).rejects.toThrow("history_truncated");
+    await expect(supabaseRepository(fakeDb({ rows: { consents: rows.map((r) => ({ ...r, call_id: null })) } }).db).listConsentHistory(F, P, "call_recording")).rejects.toThrow("history_truncated");
+  });
+  it("unscoped (voice) history still filters by family, person and purpose only", async () => {
+    const { db } = fakeDb({ rows: { consents: [row(1, { id: "v1", purpose: "voice_share:x", call_id: B }), row(2, { id: "v2", purpose: "voice_share:x", call_id: null }), row(3, { id: "z", purpose: "other" })] } });
+    expect(ids(await supabaseRepository(db).listConsentHistory(F, P, "voice_share:x"))).toEqual(["v1", "v2"]);
   });
 });

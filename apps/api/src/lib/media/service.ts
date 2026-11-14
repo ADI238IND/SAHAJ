@@ -115,7 +115,7 @@ export function createMediaService(deps: MediaDeps, options: MediaOptions = {}) 
       if (!content || content.familyId !== call.familyId || content.callId !== call.id || !content.recordingObjectPath) return stop("not_found");
       const [linked, history] = await Promise.all([
         deps.repo.getConsent(call.familyId, content.consentId),
-        deps.repo.listConsentHistory(call.familyId, call.personId, RECORDING_CONSENT_PURPOSE),
+        deps.repo.listConsentHistory(call.familyId, call.personId, RECORDING_CONSENT_PURPOSE, call.id),
       ]);
       if (!consentIsCurrent({ linked, history, familyId: call.familyId, personId: call.personId, purpose: RECORDING_CONSENT_PURPOSE, callId: call.id, now: deps.now(), maxAgeMs: options.consentMaxAgeMs })) {
         return stop("consent_required");

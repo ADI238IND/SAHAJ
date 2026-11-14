@@ -352,3 +352,49 @@ describe("retention-bound URL lifetime", () => {
     expect(await createMediaService(w2.deps).callRecording("tok-parent", CALL)).toMatchObject({ expiresInSeconds: 45 });
   });
 });
+
+describe("bounded consent history availability", () => {
+  const CALL_B = id(63);
+  const rec = (o: Partial<ConsentRow>) => consent({ purpose: RECORDING_CONSENT_PURPOSE, callId: CALL, ...o });
+  const noise = Array.from({ length: 250 }, (_, i) => rec({ id: id(1000 + i), callId: CALL_B, createdAt: new Date(Date.UTC(2026, 10, 5) + i * 1000).toISOString() }));
+  /** Repository that honors the scope contract: exact call rows plus global refusals only. */
+  const scoped = (w: ReturnType<typeof world>) => {
+    const asked: Array<string | undefined> = [];
+    w.deps.repo.listConsentHistory = async (f, p, purpose, callId) => {
+      asked.push(callId);
+      return w.consents.filter((c) => c.familyId === f && c.personId === p && c.purpose === purpose &&
+        (callId === undefined || c.callId === callId || (c.callId === null && !c.answer)));
+    };
+    return asked;
+  };
+  it("passes the requested call to the history query and keeps access despite 250 newer other-call grants", async () => {
+    const w = world({ consents: [rec({ id: CONSENT_REC, createdAt: "2026-11-01T00:00:00Z" }), ...noise] });
+    const asked = scoped(w);
+    expect((await createMediaService(w.deps).callRecording("tok-parent", CALL)).ok).toBe(true);
+    expect(asked).toEqual([CALL]);
+  });
+  it("still revokes on a same-call refusal or global refusal among the noise", async () => {
+    for (const refusal of [rec({ id: id(2000), answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(2001), callId: null, answer: false, createdAt: "2026-11-02T00:00:00Z" })]) {
+      const w = world({ consents: [rec({ id: CONSENT_REC, createdAt: "2026-11-01T00:00:00Z" }), refusal, ...noise] });
+      scoped(w);
+      expect(await createMediaService(w.deps).callRecording("tok-parent", CALL)).toMatchObject({ ok: false, code: "consent_required" });
+    }
+  });
+  it("a global grant cannot restore a refused call even though it is newest", async () => {
+    const w = world({ consents: [rec({ id: CONSENT_REC, createdAt: "2026-11-01T00:00:00Z" }), rec({ id: id(2002), answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(2003), callId: null, createdAt: "2026-11-09T00:00:00Z" })] });
+    scoped(w);
+    expect(await createMediaService(w.deps).callRecording("tok-parent", CALL)).toMatchObject({ code: "consent_required" });
+  });
+  it("answers 503 and does not authorize or sign when the history is truncated", async () => {
+    const w = world();
+    w.deps.repo.listConsentHistory = async () => { throw new Error("history_truncated"); };
+    expect(await createMediaService(w.deps).callRecording("tok-parent", CALL)).toEqual({ ok: false, code: "unavailable", status: 503 });
+    expect(w.events).toEqual([]);
+  });
+  it("voice history is requested without a call scope", async () => {
+    const w = world();
+    const asked = scoped(w);
+    expect((await createMediaService(w.deps).voicePost("tok-child", POST)).ok).toBe(true);
+    expect(asked).toEqual([undefined]);
+  });
+});

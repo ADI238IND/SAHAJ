@@ -4,7 +4,9 @@ import type {
   ObjectInfo, StorageSigner, VoiceContentRow, VoicePostRow,
 } from "./contracts";
 import { denyAllAuthorizer } from "./authorization";
-import { isBucket } from "./paths";
+import { isBucket, isUuid } from "./paths";
+/** Page size for consent history queries. A full page is treated as possibly truncated and denies. */
+export const CONSENT_HISTORY_LIMIT = 200;
 type Row = Record<string, unknown>;
 const str = (v: unknown): string => { if (typeof v !== "string") throw new Error("bad_row"); return v; };
 const strOrNull = (v: unknown): string | null => (v === null || v === undefined ? null : str(v));
@@ -61,13 +63,26 @@ export function supabaseRepository(db: SupabaseClient): MediaRepository {
       const r = await one(db.from("consents").select(COLS).eq("family_id", familyId).eq("id", consentId).maybeSingle());
       return r && consent(r);
     },
-    async listConsentHistory(familyId, personId, purpose) {
-      const { data, error } = await db.from("consents").select(COLS).eq("family_id", familyId).eq("person_id", personId)
-        .eq("purpose", purpose).order("created_at", { ascending: false }).limit(200);
-      if (error || !data) throw new Error("db_error");
-      return (data as Row[]).map(consent);
-    },
-  };
+    async listConsentHistory(familyId, personId, purpose, callId) {
+      if (!isUuid(familyId) || !isUuid(personId) || (callId !== undefined && !isUuid(callId))) throw new Error("bad_filter");
+      if (typeof purpose !== "string" || purpose.length === 0 || purpose.length > 200) throw new Error("bad_filter");
+      const base = () => db.from("consents").select(COLS).eq("family_id", familyId).eq("person_id", personId).eq("purpose", purpose);
+      const run = async (query: PromiseLike<{ data: unknown; error: unknown }>): Promise<ConsentRow[]> => {
+        const { data, error } = await query;
+        if (error || !Array.isArray(data)) throw new Error("db_error");
+        // A full page may hide rows we cannot see: refuse to decide rather than guess.
+        if (data.length >= CONSENT_HISTORY_LIMIT) throw new Error("history_truncated");
+        return (data as Row[]).map(consent);
+      };
+      const newest = { ascending: false };
+      if (callId === undefined) return run(base().order("created_at", newest).limit(CONSENT_HISTORY_LIMIT));
+      // Call-scoped: exact call rows, plus explicit global refusals only. Other calls and global grants never load.
+      const [forCall, globalRefusals] = await Promise.all([
+        run(base().eq("call_id", callId).order("created_at", newest).limit(CONSENT_HISTORY_LIMIT)),
+        run(base().is("call_id", null).eq("answer", false).order("created_at", newest).limit(CONSENT_HISTORY_LIMIT)),
+      ]);
+      return [...forCall, ...globalRefusals];
+    },  };
 }
 
 export function supabaseAuth(db: SupabaseClient): AuthPort {

@@ -54,8 +54,12 @@ export interface MediaRepository {
   getCall(callId: string): Promise<CallRow | null>;
   getCallContent(familyId: string, callId: string): Promise<CallContentRow | null>;
   getConsent(familyId: string, consentId: string): Promise<ConsentRow | null>;
-  /** Full append-only history for one person and purpose (any order). */
-  listConsentHistory(familyId: string, personId: string, purpose: string): Promise<ConsentRow[]>;
+  /**
+   * Append-only history for one person and purpose (any order). With `callId`, only rows for that exact call plus
+   * explicit global refusals (call_id null, answer false) are required; global grants must not be returned.
+   * Implementations must throw rather than return a possibly truncated history.
+   */
+  listConsentHistory(familyId: string, personId: string, purpose: string, callId?: string): Promise<ConsentRow[]>;
 }
 
 export interface ObjectInfo { size: number; contentType: string }
