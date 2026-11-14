@@ -3,7 +3,10 @@
 * **Date:** 2026-11-14T23:17:30+05:30
 * **Assigned Worktree:** `D:/Projects/SAHAJ/.worktrees/antigravity-phase5`
 * **Assigned Branch:** `feature/phase5-core2`
-* **Target Integration Lead:** Codex transfers reviewed commits to `adityasinghin01-hash/sahaj`. Never pushed or merged directly to main.
+* **Target Integration Lead:** Remote `leader` (`https://github.com/adityasinghin01-hash/sahaj.git`) and `origin` (`https://github.com/ADI238IND/SAHAJ.git`).
+* **Remote Branches Pushed:**
+  * `leader`: `feature/phase5-core2` and `singhal/phase5-core2`
+  * `origin`: `feature/phase5-core2`
 
 ---
 
@@ -15,6 +18,7 @@
 | `d7b8944` | feat | `feat(core2): implement domain service, adapters, and app router endpoints` |
 | `880e44d` | test | `test(core2): add unit and route integration test suites` |
 | `28e6703` | test | `test(phase5): add acceptance test suite and integration/mapping documentation` |
+| `7bec3a9` | docs | `docs(phase5): add checkpoint summary and verification evidence` |
 
 ---
 
