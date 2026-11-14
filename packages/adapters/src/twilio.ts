@@ -8,7 +8,11 @@ const CALL_SID = /^CA[a-f0-9]{32}$/i;
 const HINDI = "hi-IN";
 
 export interface TwilioConfig { transport: FetchTransport; accountSid: string; authToken: string; timeoutMs?: number }
-export interface TwilioCallDeps extends TwilioConfig { ledger: DispatchLedger; fromNumber: string; statusCallbackUrl: string }
+export interface TwilioCallDeps extends TwilioConfig {
+  ledger: DispatchLedger; fromNumber: string; statusCallbackUrl: string;
+  /** Server configured hosts serving consent-enforcing TwiML and callbacks. Never caller supplied. */
+  allowedWebhookHosts: readonly string[];
+}
 
 /** Start a call that fetches TwiML from `twimlUrl`. Authorization action: "twilio.create_call". Status callbacks reconcile delivery-unknown outcomes. */
 export async function createTwilioCall(deps: TwilioCallDeps, request: ProviderRequest<{ to: string; twimlUrl: string }>): Promise<ProviderResult<{ callSid: string }>> {
@@ -16,7 +20,8 @@ export async function createTwilioCall(deps: TwilioCallDeps, request: ProviderRe
   requireAuthorization(request, action);
   if (!ACCOUNT_SID.test(deps.accountSid) || !deps.authToken) throw new AdapterError("invalid_payload", "twilio");
   const to = assertE164(request.payload.to), from = assertE164(deps.fromNumber);
-  if (!request.payload.twimlUrl.startsWith("https://") || !deps.statusCallbackUrl.startsWith("https://")) throw new AdapterError("unsafe_url", "twilio");
+  assertSafeUrl(request.payload.twimlUrl, deps.allowedWebhookHosts, "twilio");
+  assertSafeUrl(deps.statusCallbackUrl, deps.allowedWebhookHosts, "twilio");
   const form = new URLSearchParams({ To: to, From: from, Url: request.payload.twimlUrl, StatusCallback: deps.statusCallbackUrl, StatusCallbackMethod: "POST" });
   for (const ev of ["initiated", "ringing", "answered", "completed"]) form.append("StatusCallbackEvent", ev);
   const auth = Buffer.from(`${deps.accountSid}:${deps.authToken}`).toString("base64");

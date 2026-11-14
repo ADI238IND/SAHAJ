@@ -16,9 +16,9 @@ export function verifyWhatsAppSignature(rawBody: string | Uint8Array, signature:
 export function verifyTwilioFormSignature(publicUrl: string, params: URLSearchParams, signature: string | null, authToken: string): boolean {
   if (!authToken || !signature || !publicUrl.startsWith("https://")) return false;
   let value = publicUrl;
-  // Official algorithm: keys sorted, each value of a repeated key appended (values sorted, no de-duplication).
+  // Twilio Node SDK toFormUrlEncodedParam: unique repeated values, sorted.
   for (const key of [...new Set(params.keys())].sort()) {
-    for (const item of params.getAll(key).sort()) value += key + item;
+    for (const item of [...new Set(params.getAll(key))].sort()) value += key + item;
   }
   return equal(signature, createHmac("sha1", authToken).update(value).digest("base64"));
 }
@@ -47,6 +47,6 @@ export function verifyWhatsAppButton(token: string, expected: { personId: string
   const expiresAt = /^[0-9a-z]{1,12}$/.test(exp) ? parseInt(exp, 36) : NaN;
   if (!NONCE.test(nonce) || !Number.isSafeInteger(expiresAt)) throw new AdapterError("invalid_signature");
   const claims: ButtonClaims = { ...expected, nonce, expiresAt };
-  if (!equal(tag, mac(claims, secret)) || expiresAt <= now) throw new AdapterError("invalid_signature");
+  if (!Number.isFinite(now) || !expected.personId || !expected.from || !expected.action || !expected.objectId || !equal(tag, mac(claims, secret)) || expiresAt <= now) throw new AdapterError("invalid_signature");
   return { nonce, expiresAt };
 }

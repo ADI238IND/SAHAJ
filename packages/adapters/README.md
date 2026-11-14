@@ -33,7 +33,7 @@ Verified against provider docs on 2026-11 (see links in `KIRO-HANDOFF.md`): Sarv
 
 ## Not done
 
-No live calls or messages were made. Real credentials, phone acceptance tests and the Sarvam dashboard setup are outstanding. Dependencies are declared in `package.json`; installing and locking them is Codex's job.
+No live calls or messages were made. Real credentials, phone acceptance tests and the Sarvam dashboard setup are outstanding. Twilio call creation requires a server-controlled `allowedWebhookHosts` list so caller payloads cannot substitute arbitrary TwiML. The default Meta media host allowlist contains only `lookaside.fbsbx.com`; configure additional exact hosts only after verifying provider documentation and deployment responses. Authorization grants are server-issued; the backend must bind actual recipient and media/recording resources to its permission decision. Dependencies are declared in `package.json`; installing and locking them is Codex's job.
 
 ## Commands
 

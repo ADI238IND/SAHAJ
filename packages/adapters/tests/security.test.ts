@@ -26,17 +26,23 @@ describe("Twilio form signature", () => {
   const token = "synthetic-auth-token";
   const sign = (u: string, p: URLSearchParams) => {
     let v = u;
-    for (const k of [...new Set(p.keys())].sort()) for (const x of p.getAll(k).sort()) v += k + x;
+    for (const k of [...new Set(p.keys())].sort()) for (const x of [...new Set(p.getAll(k))].sort()) v += k + x;
     return createHmac("sha1", token).update(v).digest("base64");
   };
   // Twilio documented example values (docs: usage/security) are for a different URL; we compute the reference algorithm locally.
   const params = new URLSearchParams({ CallSid: "CA1234567890ABCDE", Digits: "1234", From: "+10000000000", To: "+10000000001" });
   it("accepts a valid signature", () => expect(verifyTwilioFormSignature(url, params, sign(url, params), token)).toBe(true));
-  it("includes repeated values without de-duplicating", () => {
+  it("matches a fixed synthetic repeated-value vector using official SDK canonicalization", () => {
+    // SDK toFormUrlEncodedParam uses Array.from(new Set(values)).sort().
+    // Canonical input ends in A1A2B3; signature is fixed independently of this verifier.
+    const repeated = new URLSearchParams([["B", "3"], ["A", "2"], ["A", "1"], ["A", "1"]]);
+    expect(verifyTwilioFormSignature(url, repeated, "ET7sILwVT/XNAS7UQrUWi5obWPQ=", token)).toBe(true);
+  });
+  it("deduplicates repeated values like the official Twilio Node SDK", () => {
     const p = new URLSearchParams([["A", "1"], ["A", "1"], ["B", "2"]]);
     expect(verifyTwilioFormSignature(url, p, sign(url, p), token)).toBe(true);
     const deduped = new URLSearchParams([["A", "1"], ["B", "2"]]);
-    expect(verifyTwilioFormSignature(url, p, sign(url, deduped), token)).toBe(false);
+    expect(verifyTwilioFormSignature(url, p, sign(url, deduped), token)).toBe(true);
   });
   it("rejects wrong URL, tampered params, wrong token, http URL, missing signature", () => {
     const good = sign(url, params);

@@ -6,8 +6,8 @@ import { verifyWhatsAppSignature } from "./security";
 const GRAPH = "https://graph.facebook.com";
 const NUMERIC_ID = /^\d{1,32}$/;
 const MEDIA_ID = /^[A-Za-z0-9_-]{1,128}$/;
-/** Hosts WhatsApp media downloads are served from. Override via config if Meta documents a change. */
-export const DEFAULT_MEDIA_HOSTS = ["lookaside.fbsbx.com", "*.fbsbx.com", "*.fbcdn.net", "*.whatsapp.net"] as const;
+/** Fail closed to this exact host; deployments must explicitly configure additional verified hosts. */
+export const DEFAULT_MEDIA_HOSTS = ["lookaside.fbsbx.com"] as const;
 const AUDIO_TYPES = new Set(["audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr"]);
 const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
 

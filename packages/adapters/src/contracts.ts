@@ -41,7 +41,7 @@ export class AdapterError extends Error {
 }
 export function requireAuthorization(request: ProviderRequest<unknown>, action: string, now = Date.now()): void {
   const grant = request.authorization;
-  if (!grant || grant.decision !== "allow" || grant.consent !== true || grant.personId !== request.personId ||
+  if (!Number.isFinite(now) || !grant || grant.decision !== "allow" || grant.consent !== true || grant.personId !== request.personId ||
       grant.action !== action || grant.idempotencyKey !== request.idempotencyKey || !request.personId ||
       !request.idempotencyKey || !Number.isFinite(grant.expiresAt) || grant.expiresAt <= now) {
     throw new AdapterError("authorization_denied");

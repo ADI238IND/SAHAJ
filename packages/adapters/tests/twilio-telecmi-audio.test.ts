@@ -6,10 +6,19 @@ import { AI_DISCLOSURE, MockAudioConverter, MockSpeechToText, MockTextToSpeech, 
 import { KEY, MemoryLedger, PERSON, PHONE, code, hang, json, req, scripted } from "./helpers";
 
 const SID = "AC" + "a".repeat(32), CALL = "CA" + "b".repeat(32), TOKEN = "synthetic-twilio-token";
-const twilioDeps = (transport: TwilioCallDeps["transport"], ledger = new MemoryLedger()): TwilioCallDeps => ({ transport, ledger, accountSid: SID, authToken: TOKEN, fromNumber: "+918000000000", statusCallbackUrl: "https://api.example.test/api/twilio/status", timeoutMs: 30 });
+const twilioDeps = (transport: TwilioCallDeps["transport"], ledger = new MemoryLedger()): TwilioCallDeps => ({ transport, ledger, accountSid: SID, authToken: TOKEN, fromNumber: "+918000000000", statusCallbackUrl: "https://api.example.test/api/twilio/status", allowedWebhookHosts: ["api.example.test"], timeoutMs: 30 });
 
 describe("Twilio create call", () => {
   const r = () => req("twilio.create_call", { to: PHONE, twimlUrl: "https://api.example.test/api/twilio/voice/relay" });
+  it("refuses attacker TwiML before claiming or contacting the provider", async () => {
+    const t = scripted(); const deps = twilioDeps(t.transport);
+    for (const url of ["https://evil.test/record-without-consent", "https://api.example.test@evil.test/", "https://127.0.0.1/", "https://api.example.test:444/"]) {
+      const request = r(); request.payload.twimlUrl = url;
+      expect(await code(createTwilioCall(deps, request))).toBe("unsafe_url");
+    }
+    expect(t.calls).toHaveLength(0);
+    expect((deps.ledger as MemoryLedger).claims.size).toBe(0);
+  });
   it("posts a form with basic auth and records the call sid", async () => {
     const t = scripted(json({ sid: CALL })); const deps = twilioDeps(t.transport);
     expect((await createTwilioCall(deps, r())).data.callSid).toBe(CALL);
