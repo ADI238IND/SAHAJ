@@ -24,6 +24,9 @@ Updated 2026-11-14. Estimates measure reviewed implementation and integration, n
 
 | Worker | Folder | State |
 | --- | --- | --- |
+| Antigravity foundation | `.worktrees/antigravity-foundation` | Phase1 closure assigned; prompt in coordination/PHASE1-ANTIGRAVITY.md |
+| Kiro Phase2 | `.worktrees/kiro-phase2` | Running on feature/phase2-ingestion; dispatch/recording migration and adapter implementation in progress |
+| Kiro Phase3 | `.worktrees/kiro-phase3` | Running on feature/phase3-orchestration; atomic authorization/workflow migration in progress |
 | Kiro A | `.worktrees/kiro-a` | Audit finished as `fc9c60a`, integrated as `2adc25a`; findings saved in provider-ingestion/REVIEW-NEXT.md |
 | Kiro B | `.worktrees/kiro-b` | Consent-query fix `4cd8a41` independently passed101 media tests, integrated as `65d2e84` |
 | Antigravity A | `.worktrees/antigravity-a` | Commit `d3407ed` reviewed; fixes required; see review handoff |
@@ -33,6 +36,8 @@ Tasks and ownership are saved in `coordination/`. Kiro execution logs remain loc
 
 ## Deployment and remaining work
 
-Production checkpoint `a48c7c5` is READY on Vercel, with `/api/health`200 behind deployment protection (deployment `dpl_Cznycg5yf6VjSEHMRAAgVU39GYGx`). Health remains scaffold-only and explicitly reports voice unavailable and emergency_ready=false. Later consent-query/identity-envelope fixes require another deployment after checks. Runtime environment values are configured securely; actual provider credentials and real-phone acceptance remain outstanding.
+Production checkpoint `465fe55` is READY on Vercel, with `/api/health`200 behind deployment protection (deployment `dpl_HKja81kKsmHDfuoNHUQTFj1TRoRH`). Includes the consent-query/identity-envelope fixes. Health remains scaffold-only and explicitly reports voice unavailable and emergency_ready=false. Frozen installs succeeded in all three new phase worktrees; integrated root311 tests, typechecks and production build pass. Runtime environment values are configured securely; actual provider credentials and real-phone acceptance remain outstanding.
+
+GitHub staging visibility rechecked through the connected API on2026-11-14: public. No visibility changes made. Only synthetic fixtures and code are committed; credentials and real personal data remain excluded.
 
 Next: complete combined validation and push checkpoint; integrate reviewed Antigravity work; wire media Cedar and durable Atlas repository/outbox, atomic permission usage/nonce consumption, provider attempt/call/consent writers, and recording retrieval worker. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.

@@ -1,47 +1,47 @@
-# Sahaj — Core 1 Pulse · Milestone 1 starter
+# SAHAJ backend
 
-**Scope:** Windows-friendly `pnpm` monorepo baseline for the API. This is a safe **foundation scaffold**, not a deployed or production-ready care service.
+Core 1 and shared-backend staging monorepo for Vihaan X. Current coding progress, tested checkpoints and deployment limits are recorded in [PROGRESS.md](PROGRESS.md). This is not an operational emergency response service.
 
-## Verified behavior
+Use Windows PowerShell, Node.js24 and pnpm12.4.0. From the repository root:
 
-- `GET /api/health` returns HTTP 200 and describes the current scaffold status.
-- `POST /api/sarvam/tool/ping` checks a bearer token securely and returns a safe test response.
-- `POST /api/cron/tick` checks `x-cron-secret` and returns a *no-work-performed* scaffold response.
-- `GET /api/whatsapp` handles Meta's verification challenge.
-- `POST /api/whatsapp` verifies Meta's SHA-256 signature, then responds HTTP 503 until event storage is implemented. **Do not connect a production WhatsApp webhook yet.**
-- `POST /api/sarvam/post-call/[secret]` and `POST /api/missed-call/[secret]` validate their URL secret and respond 503 until provider cross-checks and persistence are implemented. **Do not connect real providers yet.**
-- `POST /api/twilio/voice/test` returns HTTP 501 until signature/TwiML handling is implemented.
-- `infra/supabase/migrations/20261114_0001_foundation.sql` creates starter tables with RLS enabled. No client read/write policies are granted.
+```powershell
+pnpm.cmd install --frozen-lockfile
+pnpm.cmd typecheck
+pnpm.cmd test
+pnpm.cmd build
+```
 
-## Requirements
+Build scripts are explicitly approved for `esbuild@0.28.2` in `pnpm-workspace.yaml`. Review any new script/version before approving it; retain supply-chain verification.
 
-Windows PowerShell, Node.js 22.13+ (v24 is fine), Git, pnpm 12, Supabase project, optional Vercel.
+For local development, copy `apps/api/.env.example` to ignored `apps/api/.env.local`, configure server-only values securely, then run `pnpm.cmd dev`. Never put secret values in chat, logs or Git. The API listens on localhost:3000 by default.
 
-## Local quickstart
+The current health route is liveness-only and reports scaffold limitations. Verified webhooks persist encrypted, person-bound input before acknowledging it. Cron currently moves input into a durable job queue; that is not evidence a care action ran. Media requires live family membership, consent and Cedar; production media authorization denies until the real gate is wired. The Twilio voice test route remains501. Provider dispatch and Atlas execution are being integrated in separate worktrees.
 
-1. Clone your empty GitHub repository and extract the **contents** of this ZIP into its root (do not replace `.git`).
-2. From repository root: `pnpm install`.
-3. Copy `apps/api/.env.example` to `apps/api/.env.local`.
-4. Use `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` to generate **different** secret values for `SARVAM_TOOL_BEARER`, `SARVAM_HOOK_SECRET`, `MISSEDCALL_HOOK_SECRET`, `WHATSAPP_VERIFY_TOKEN` and `CRON_SECRET`. Store secrets locally only.
-5. `pnpm dev`.
-6. Visit `http://localhost:3000/api/health`. Run `powershell -ExecutionPolicy Bypass -File scripts/check.ps1` from root.
-7. Run `pnpm test` for the secret-comparison unit tests.
-8. After reviewing the SQL, use Supabase SQL Editor to execute `infra/supabase/migrations/20261114_0001_foundation.sql`, once, against the **dedicated Sahaj project**.
-9. Fill `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` locally or in Vercel server env only; these are not used by initial stub routes. Never publish the service role key.
-10. Commit and push using a GitHub account with write permission. Configure Vercel Root Directory: `apps/api`.
+## Database setup
 
-## Gate to the NEXT milestone
+Use a dedicated Supabase project and an administrative migration connection. Apply reviewed migrations in recorded order; never reset an existing hosted database:
 
-The foundation is **not complete** yet. Before connecting real phone numbers or WhatsApp recipients, implement and verify:
-- signed webhooks/provider IDs with persistence and replay defenses;
-- family-scoped auth and test RLS policies;
-- LangGraph with PostgresSaver and real cron resume;
-- provider-call sandbox tests; server-side signing and Cedar permission policies;
-- no false-success on missed calls or emergencies.
+1. `infra/supabase/migrations/20261114125704_foundation.sql`
+2. `infra/supabase/migrations/20261114130240_core1_security_workflows.sql`
+3. `infra/supabase/migrations/20261114131827_signed_timeline.sql`
+4. `infra/supabase/migrations/20261114141830_checkpoint_media_metadata.sql`
 
-## Security
+Apply `infra/supabase/seed.sql` explicitly for synthetic demo data. It creates no authenticated memberships or consent. Future migrations must be reviewed before application. See [database contracts](infra/supabase/README.md) and [Atlas setup](packages/atlas/README.md) for private schema, runtime-role and verified TLS details. Run rollback-only SQL suites under `infra/supabase/tests/` through the administrative test connection.
 
-- Never put `.env.local` in Git.
-- Repo should be **private** for the team.
-- No personal phone numbers, OTPs, recording files, medicine records, or real family information in tests, AI prompts, Git commits or logs.
-- Do not deploy this baseline as a functioning emergency-response product.
+From the repository root, with ignored runtime configuration already saved:
+
+```powershell
+node apps/api/scripts/check-runtime.mjs
+node --env-file=apps/api/.env.local packages/atlas/scripts/setup-checkpointer.mjs
+node --env-file=apps/api/.env.local packages/atlas/scripts/check-postgres-restart.mjs
+```
+
+The checkpoint setup command verifies the administratively provisioned schema and hardens access; it does not grant database CREATE. The restart test uses synthetic identifiers and removes its thread after success.
+
+## Parallel work and release
+
+Phase ownership and worktree prompts are under `coordination/`. Each worker commits only its owned files; Codex independently reviews, integrates, runs combined checks and deploys. Keep `packages/shared`, mobile applications and Shield outside this backend scope. Root/app manifest and lockfile changes require integration coordination.
+
+Vercel uses Node24, Next.js and root directory `apps/api`, with workspace source outside the root enabled. Configure runtime values as sensitive server-side environment variables. Verify the exact deployed commit and protected health/readiness response; a successful build alone does not prove working care features.
+
+This staging repository was verified public on2026-11-14. Use synthetic data only. No real phone numbers, health records, voice recordings, credentials, OTPs or payment details belong in Git, prompts or logs. AI speech must disclose itself. Recordings and sharing require consent. Authorize external actions through Cedar; never infer responder acceptance from enqueueing, a model response or a generic completed-call callback.
