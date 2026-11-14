@@ -25,6 +25,7 @@ Updated 2026-11-14. Estimates measure reviewed implementation and integration, n
 | Worker | Folder | State |
 | --- | --- | --- |
 | Antigravity foundation | `.worktrees/antigravity-foundation` | Phase1 closure assigned; prompt in coordination/PHASE1-ANTIGRAVITY.md |
+| Antigravity App QA | `.worktrees/antigravity-phase1-qa` | Separate Phase1 acceptance-test lane; prompt in coordination/ANTIGRAVITY-APP-PHASE1.md |
 | Kiro Phase2 | `.worktrees/kiro-phase2` | Running on feature/phase2-ingestion; dispatch/recording migration and adapter implementation in progress |
 | Kiro Phase3 | `.worktrees/kiro-phase3` | Running on feature/phase3-orchestration; atomic authorization/workflow migration in progress |
 | Kiro A | `.worktrees/kiro-a` | Audit finished as `fc9c60a`, integrated as `2adc25a`; findings saved in provider-ingestion/REVIEW-NEXT.md |
@@ -39,5 +40,9 @@ Tasks and ownership are saved in `coordination/`. Kiro execution logs remain loc
 Production checkpoint `465fe55` is READY on Vercel, with `/api/health`200 behind deployment protection (deployment `dpl_HKja81kKsmHDfuoNHUQTFj1TRoRH`). Includes the consent-query/identity-envelope fixes. Health remains scaffold-only and explicitly reports voice unavailable and emergency_ready=false. Frozen installs succeeded in all three new phase worktrees; integrated root311 tests, typechecks and production build pass. Runtime environment values are configured securely; actual provider credentials and real-phone acceptance remain outstanding.
 
 GitHub staging visibility rechecked through the connected API on2026-11-14: public. No visibility changes made. Only synthetic fixtures and code are committed; credentials and real personal data remain excluded.
+
+Commander workflow: Antigravity IDE implements Phase1; Antigravity App authors independent QA; KiroA implements Phase2; KiroB implements Phase3. Codex tests, reviews, coordinates contracts, integrates and checkpoints, returning defects to the owning worker. Phases4 then5 start only after earlier phase acceptance. No worker merges or deploys independently.
+
+Readiness migration20261114150944 applied and live RPC verified database=connected/schema_ready=true/schema_version=foundation-v4. Antigravity health changes still require final independent tests, integration and deployment. KiroPhase2 second-pass tip9b192ac and KiroPhase3 tip03a5bb7 remain unmerged pending documented review fixes; both CLI lanes resumed. These unaccepted commits do not raise percentages.
 
 Next: complete combined validation and push checkpoint; integrate reviewed Antigravity work; wire media Cedar and durable Atlas repository/outbox, atomic permission usage/nonce consumption, provider attempt/call/consent writers, and recording retrieval worker. Keep actual external actions disabled until authorization and durable processing are demonstrated. Do not claim emergency acceptance from an unverified callback or model output.

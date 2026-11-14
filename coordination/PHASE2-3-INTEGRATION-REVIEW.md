@@ -22,3 +22,10 @@ Use normalized internal proof events, created only after provider request verifi
 8. put_call_recording must serialize the first recording by locking the existing calls row before selecting possibly absent call_content. Two simultaneous first recordings must follow the documented stored/ignored_additional policy, rather than an unexpected unique violation. Recheck exact effective consent under that same fence.
 
 Read coordination/PHASE3-CONTRACT-REVIEW.md for exact current schema and atomic invariants. Save tested scoped commits and parent will re-review actual changes before any migration or deployment.
+
+## Phase3 committed TypeScript review of552b0bb
+
+- Timeline replay currently compares only signature/family/key/eventType; also compare immutable payload hash, entity ID and human line. Changed content under an existing key must conflict, not silently succeed. Generated current timestamp/head should not create false conflicts on a valid replay.
+- A renew-before/after-work lease does not fence a graph/model/checkpoint operation longer than its lease. Prevent two processes writing the same thread and ensure timeline append is fenced atomically with current lease, not renew-then-separate-append. Use durable exclusivity/fencing and tests with lease expiry mid-operation.
+- Sarvam outbound/TeleCMI events cannot simply complete as generic status facts when they contain check-in understanding or nudge input. Sarvam transcript extraction must read the consented encrypted content; WhatsApp-only text extraction leaves Hindi call understanding inert. Unsupported/missing content requires durable review, not success.
+- Interrupted urgent jobs must not wake endlessly from the same previously-consumed delivery proof while responder acceptance is absent. Bind wakeup to new relevant proof/revision and test duplicate evidence.

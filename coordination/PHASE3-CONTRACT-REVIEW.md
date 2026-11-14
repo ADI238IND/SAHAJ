@@ -90,3 +90,6 @@ For timeline writes, use the existing real SHA-256/Ed25519 signing code and `app
 - Timeline lost-response recovery returns the committed entry; head races retry safely without conflicting duplicate outcomes.
 
 Local mocks demonstrate code contracts only. Record actual database transaction/concurrency test results separately; do not claim real-provider, real-phone or production workflow success from fixtures.
+# Required integration review
+
+Before your final checkpoint, also read `D:/Projects/SAHAJ/coordination/PHASE2-3-INTEGRATION-REVIEW.md`. It records concrete cross-worker contract and security blockers found in the draft migrations, including acceptance-proof event mismatch, explicit deny precedence, revocation fencing and approval binding. Resolve these in your owned files and flag other-worker dependencies; do not apply drafts remotely.
