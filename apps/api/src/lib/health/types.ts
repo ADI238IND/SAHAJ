@@ -25,7 +25,7 @@ export interface DatabaseProbeResult {
 
 export interface ReadinessDependencies {
   isConfigured: () => boolean;
-  probeDatabase: (timeoutMs: number) => Promise<DatabaseProbeResult>;
+  probeDatabase: (timeoutMs: number, abortSignal?: AbortSignal) => Promise<DatabaseProbeResult>;
 }
 
 export interface HealthResponse {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { evaluateReadiness } from "../../src/lib/health/readiness";
 import { evaluateLiveness } from "../../src/lib/health/liveness";
 import type { DatabaseProbeResult, ReadinessDependencies } from "../../src/lib/health/types";
@@ -6,6 +6,10 @@ import type { DatabaseProbeResult, ReadinessDependencies } from "../../src/lib/h
 describe("Health & Readiness evaluation", () => {
   const fixedDate = new Date("2026-11-14T20:00:00.000Z");
   const options = { timeoutMs: 100, now: () => fixedDate };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("fails with 503 when database is not configured (database unavailable)", async () => {
     const deps: ReadinessDependencies = {
@@ -28,6 +32,30 @@ describe("Health & Readiness evaluation", () => {
     expect(res.body.care_actions).toBe("disabled");
     expect(res.body.voice).toBe("disabled");
     expect(res.body.timestamp).toBe(fixedDate.toISOString());
+  });
+
+  it("fails safely with 503 when isConfigured throws an exception", async () => {
+    const deps: ReadinessDependencies = {
+      isConfigured: () => {
+        throw new Error("Secret KMS decryption failed: key_id=secret-key-1234");
+      },
+      probeDatabase: async () => ({
+        ok: true,
+        status: "connected",
+        schemaOk: true
+      })
+    };
+
+    const res = await evaluateReadiness(deps, options);
+    expect(res.httpStatus).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe("degraded");
+    expect(res.body.database?.status).toBe("not_configured");
+    expect(res.body.database?.code).toBe("database_not_configured");
+
+    const jsonStr = JSON.stringify(res.body);
+    expect(jsonStr).not.toContain("KMS decryption");
+    expect(jsonStr).not.toContain("secret-key-1234");
   });
 
   it("fails with 503 when database is configured but unreachable", async () => {
@@ -68,7 +96,28 @@ describe("Health & Readiness evaluation", () => {
     expect(res.body.emergency_ready).toBe(false);
   });
 
-  it("fails with 503 when bounded database probe times out", async () => {
+  it("regression: connected + schemaOk=false returns 503 and never 200 ready", async () => {
+    const deps: ReadinessDependencies = {
+      isConfigured: () => true,
+      probeDatabase: async () => ({
+        ok: true,
+        status: "connected",
+        latencyMs: 8,
+        schemaOk: false
+      })
+    };
+
+    const res = await evaluateReadiness(deps, options);
+    expect(res.httpStatus).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe("degraded");
+    expect(res.body.database?.status).toBe("missing_schema");
+    expect(res.body.database?.code).toBe("schema_missing");
+    expect(res.body.database?.latency_ms).toBe(8);
+    expect(res.body.emergency_ready).toBe(false);
+  });
+
+  it("fails with 503 when bounded database probe returns timeout result", async () => {
     const deps: ReadinessDependencies = {
       isConfigured: () => true,
       probeDatabase: async () => ({
@@ -84,6 +133,37 @@ describe("Health & Readiness evaluation", () => {
     expect(res.body.ok).toBe(false);
     expect(res.body.database?.status).toBe("timeout");
     expect(res.body.database?.code).toBe("database_timeout");
+  });
+
+  it("enforces independent bounded deadline and cancels when probe never settles", async () => {
+    vi.useFakeTimers();
+
+    let signalAborted = false;
+    const deps: ReadinessDependencies = {
+      isConfigured: () => true,
+      probeDatabase: (_timeoutMs, abortSignal) => {
+        if (abortSignal) {
+          abortSignal.addEventListener("abort", () => {
+            signalAborted = true;
+          });
+        }
+        // Never-resolving promise: dependency ignores its timeout or hangs indefinitely
+        return new Promise<DatabaseProbeResult>(() => {});
+      }
+    };
+
+    const readinessPromise = evaluateReadiness(deps, { timeoutMs: 50, now: () => fixedDate });
+
+    // Advance fake timers past the 50ms deadline
+    await vi.advanceTimersByTimeAsync(60);
+
+    const res = await readinessPromise;
+    expect(res.httpStatus).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.status).toBe("degraded");
+    expect(res.body.database?.status).toBe("timeout");
+    expect(res.body.database?.code).toBe("database_timeout");
+    expect(signalAborted).toBe(true);
   });
 
   it("recovers from failure dynamically when dependencies become healthy", async () => {
@@ -114,6 +194,37 @@ describe("Health & Readiness evaluation", () => {
     expect(recoverRes.body.database?.status).toBe("connected");
     expect(recoverRes.body.database?.schema).toBe("present");
     expect(recoverRes.body.emergency_ready).toBe(false);
+  });
+
+  it("recovers to 200 ready after a never-resolving timeout failure using fake timers", async () => {
+    vi.useFakeTimers();
+
+    let shouldHang = true;
+    const deps: ReadinessDependencies = {
+      isConfigured: () => true,
+      probeDatabase: async () => {
+        if (shouldHang) {
+          return new Promise<DatabaseProbeResult>(() => {});
+        }
+        return { ok: true, status: "connected", latencyMs: 4, schemaOk: true };
+      }
+    };
+
+    // 1. Timeout phase
+    const hangingPromise = evaluateReadiness(deps, { timeoutMs: 100, now: () => fixedDate });
+    await vi.advanceTimersByTimeAsync(110);
+    const timeoutRes = await hangingPromise;
+    expect(timeoutRes.httpStatus).toBe(503);
+    expect(timeoutRes.body.database?.status).toBe("timeout");
+
+    // 2. Recovery phase
+    shouldHang = false;
+    const recoverRes = await evaluateReadiness(deps, { timeoutMs: 100, now: () => fixedDate });
+    expect(recoverRes.httpStatus).toBe(200);
+    expect(recoverRes.body.ok).toBe(true);
+    expect(recoverRes.body.status).toBe("ready");
+    expect(recoverRes.body.database?.status).toBe("connected");
+    expect(recoverRes.body.database?.schema).toBe("present");
   });
 
   it("guarantees safe error bodies with zero credential, tenant, or SQL leakages", async () => {
@@ -159,7 +270,6 @@ describe("Health & Readiness evaluation", () => {
   });
 
   it("strictly enforces disabled care actions and false emergency readiness", async () => {
-    // Check in both ready and degraded states
     const readyDeps: ReadinessDependencies = {
       isConfigured: () => true,
       probeDatabase: async () => ({ ok: true, status: "connected", latencyMs: 3, schemaOk: true })
@@ -203,7 +313,9 @@ describe("Health & Readiness evaluation", () => {
     const throwingDeps: ReadinessDependencies = {
       isConfigured: () => true,
       probeDatabase: async () => {
-        throw new Error("Unhandled network error with connection string: postgresql://secret:pass@host/db");
+        throw new Error(
+          "Unhandled network error with connection string: postgresql://secret:pass@host/db"
+        );
       }
     };
 

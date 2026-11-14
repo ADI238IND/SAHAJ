@@ -12,7 +12,9 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
   - `apps/api/tests/health/**`
   - `infra/supabase/tests/phase1_*.sql`
   - `docs/phase1/**`
-- **Untouched paths**: All adapters, media, cron, Atlas, Cedar, migrations, package manifests, and lockfiles.
+- **Excluded from Phase 1 Scope (No Provider or Atlas Feature Readiness Claims)**:
+  - External care actions and voice remain strictly disabled (`care_actions: "disabled"`, `voice: "disabled"`, `emergency_ready: false`).
+  - Provider credentials, live phone calls/SMS, WhatsApp webhooks, complete webhook dispatch/retry consumers, media Cedar policy wiring, full Atlas workflow engine repositories, and outbox consumers belong to Phases 2–5.
 
 ---
 
@@ -27,12 +29,22 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 
 ## 3. API Health & Dependency Readiness
 
-- [x] **Bounded Readiness Architecture**:
-  - Replaced static `"database": "not-yet-connected"` placeholder with real dependency probe.
-  - Implemented dependency injection via `ReadinessDependencies` port (`apps/api/src/lib/health/`).
-  - Probes database connectivity and schema existence with an explicit `3000ms` bounded deadline (`AbortController` + `abortSignal`).
+- [x] **Bounded Readiness Architecture & Schema Probe**:
+  - Consumes service-only `public.foundation_readiness()` RPC returning exact JSON contract:
+    `{ database: 'connected', schema_ready: boolean, schema_version: 'foundation-v4' }`.
+  - Final migration/schema dependency: Parent is implementing the service-only `public.foundation_readiness()` RPC and will provide the exact readiness migration filename.
+  - Consumes exact result defensively, handling missing RPC, malformed response, or false schema (`schema_ready: false`) as HTTP 503 degraded (`missing_schema`, `schema_missing`).
+  - Requires `probe.schemaOk === true` as well as `probe.ok === true` and `probe.status === "connected"` for HTTP 200 ready. Regression tested: `connected + schemaOk=false` returns HTTP 503, never 200 ready.
+  - Does not query or expose private schemas directly.
+- [x] **Independent Bounded Deadline**:
+  - Enforces an independent bounded deadline around the injected probe, ensuring `evaluateReadiness` resolves even when the dependency ignores its timeout or hangs indefinitely.
+  - Propagates cancellation via `AbortController` where supported.
+  - Guarantees timer clearance (`clearTimeout`) across all execution paths.
+  - Tested with never-resolving fake probes and recovery tests using Vitest fake timers.
+  - Safe error handling: `isConfigured` exceptions fail safely to HTTP 503 without leaking error details.
+  - SDK abort `{ error }` responses recognized as timeout (`database_timeout`).
 - [x] **Liveness vs. Readiness Distinction**:
-  - Liveness probe (`/api/health/liveness` or `GET /api/health?probe=liveness`) returns HTTP 200 confirming process vitality.
+  - Liveness probe (`/api/health/liveness` or `GET /api/health?probe=liveness`) returns HTTP 200 without downstream checks.
   - Readiness probe (`/api/health/readiness` or default `GET /api/health`) evaluates dependencies and returns HTTP 200 when ready or HTTP 503 Service Unavailable when configuration, connectivity, or schema is missing or timed out.
 - [x] **Safe Error Bodies**:
   - Zero leakages: credentials, connection strings, tenant UUIDs, and raw SQL/PostgreSQL error traces are never exposed in JSON responses.
@@ -49,32 +61,42 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 
 - [x] **Acceptance Suite**: Implemented in `infra/supabase/tests/phase1_security_acceptance.sql`.
 - [x] **Rollback-Only**: Encapsulated within `begin; ... rollback;`; zero persistent state or test residue.
-- [x] **Application Table RLS**:
-  - Validates `relrowsecurity = true` across all 28 foundation and Core 1 tables in `public`, `sahaj_private`, and `sahaj_checkpoints`.
+- [x] **Non-Vacuous Object Existence & Application Table RLS**:
+  - Explicitly asserts that all 33 required tables across `public`, `sahaj_private`, and `sahaj_checkpoints` exist before iterating RLS (absent objects fail immediately and cannot vacuously pass).
+  - Validates `relrowsecurity = true` on every required table.
+- [x] **Private Schema & Storage Bucket Isolation**:
+  - `sahaj_private`: `anon` has no `USAGE`. PUBLIC (grantee = 0 inspected via `aclexplode`) has no `USAGE` or `CREATE`.
+  - Authenticated `USAGE` on `sahaj_private` is preserved for `has_role`/`is_person` RLS helpers (as documented in `PHASE1-LIVE-EVIDENCE.md`).
+  - Browser roles (`anon`, `authenticated`) lack direct table privileges (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) on all private content tables (`call_content`, `voice_content`, `private_items`).
+  - `sahaj_checkpoints`: `anon` and `authenticated` have no `USAGE`. PUBLIC has no `USAGE` or `CREATE`.
+  - Media storage buckets: Asserts all 3 named care buckets (`sahaj-voice`, `sahaj-recordings`, `sahaj-lines`) actually exist AND are private (`public = false`).
+- [x] **PUBLIC Role Handling**:
+  - Recognizes `PUBLIC` as an ACL pseudo-role (grantee = 0), never calling `has_*_privilege('public', ...)`.
+  - Inspects `aclexplode` grantee = 0 for schema and procedure privilege verification.
+- [x] **Service-Only RPCs**:
+  - Explicitly asserts that all 13 required service-only procedures actually exist before checking execution grants.
+  - Verifies that neither `anon`, `authenticated`, nor `PUBLIC` has `EXECUTE` privileges.
+  - Verifies that `service_role` has `EXECUTE` privileges.
 - [x] **Anonymous Role Boundary**:
   - Confirms default deny: `anon` cannot read or write any application tables (`families`, `people`, `calls`, `incidents`, `raw_events`, `consents`, etc.).
 - [x] **Authenticated Tenant Boundary**:
   - Cross-tenant fencing: Family A members cannot view or access Family B data.
   - Role fencing: Child, Parent, and Circle roles strictly adhere to least-privilege visibility rules.
   - Revoked membership: `revoked_at` revocation immediately cuts off all tenant access.
-  - Client mutation denial: `authenticated` role cannot update `family_memberships` or `consents`.
-- [x] **Private Schema & Bucket Isolation**:
-  - `sahaj_private` and `sahaj_checkpoints` schemas grant zero `USAGE` to `anon` or `authenticated`.
-  - Media storage buckets (`sahaj-voice`, `sahaj-recordings`, `sahaj-lines`) verified private (`public = false`).
-- [x] **Service-Only RPCs**:
-  - Verifies that all 13 service-only database procedures cannot be executed by `anon` or `authenticated`, and are granted solely to `service_role`.
+  - Client mutation denial: `authenticated` role cannot update `family_memberships` or access private content tables.
 - [x] **Checkpoint Runtime Role Least Privilege**:
-  - `sahaj_atlas_runtime` role has NO database `CREATE` privilege.
+  - `sahaj_atlas_runtime` role has NO database-wide `CREATE` privilege.
   - Restricted to `USAGE` on `sahaj_checkpoints` with zero access to `sahaj_private` or sensitive application tables.
+  - Exactly 4 checkpoint tables verified.
 
 ---
 
-## 5. Foundation Defect Report & Proposed Patch to Codex
+## 5. Foundation Defect Report & Proposed Patch to Parent
 
 ### Defect Notice: `scripts/check.ps1` Local Smoke Expectation
 - **Observed Behavior**: The existing scaffold script `scripts/check.ps1` calls `GET http://localhost:3000/api/health` and throws if the HTTP status is not 200 (`if (-not $health.ok)`).
 - **Impact**: Under Phase 1 foundation readiness, `/api/health` correctly returns HTTP 503 in local development environments where real Supabase credentials (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) are intentionally not configured.
-- **Proposed Patch to Codex** (since `scripts/` is outside Antigravity's owned paths):
+- **Proposed Patch to Parent** (since `scripts/` is outside Antigravity's owned paths):
   ```diff
   --- a/scripts/check.ps1
   +++ b/scripts/check.ps1
@@ -90,15 +112,17 @@ Phase 1 establishes the secure build, API foundation, database schema, Row-Level
 
 ## 6. Remaining Remote Verification (Required Before 100% Phase 1 Closure)
 
-In accordance with Phase 1 instructions, Phase 1 cannot be declared 100% complete until the following remote checks are completed by Codex:
+In accordance with `coordination/PHASE1-REVIEW.md` and `coordination/PHASE1-ACCEPTANCE-AUDIT.md`, Phase 1 cannot be marked 100% complete until the following parent actions and live readiness evidence are completed:
 
-1. **Remote Database Security Acceptance**:
+1. **Schema Dependency Migration (Parent Action)**:
+   - Parent provides the exact migration filename creating `public.foundation_readiness()` returning `{database:'connected', schema_ready:boolean, schema_version:'foundation-v4'}`.
+   - Migration is applied to the dedicated Supabase project.
+2. **Remote Database Security Acceptance (Parent Action)**:
    - Execute `infra/supabase/tests/phase1_security_acceptance.sql` against the connected hosted Supabase project.
    - Verify transaction rolls back with zero assertion exceptions.
-2. **Deployed Vercel Health & Readiness**:
+3. **Deployed Vercel Health & Readiness (Parent Action)**:
    - Trigger deployment of the integration branch containing Phase 1 closure.
    - Probe deployed endpoint `/api/health?probe=liveness` -> returns HTTP 200 with `no-store`.
-   - Probe deployed endpoint `/api/health` (readiness) with configured database -> returns HTTP 200 (`database.status = "connected"`).
-3. **Combined Multi-Worker Integration**:
-   - Merge `feature/phase1-closure` into the main integration branch (`feature/core1-atlas`).
-   - Run complete suite (combined build, typecheck across all packages, 311+ tests).
+   - Probe deployed endpoint `/api/health` (readiness) with configured database -> returns HTTP 200 (`database.status = "connected"`, `database.schema = "present"`).
+4. **Independent Closure Suite Record**:
+   - Parent records exact deployed commit SHA, local/deployed readiness evidence, and PostgreSQL closure results before marking Phase 1 100%.

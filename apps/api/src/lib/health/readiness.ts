@@ -1,10 +1,18 @@
-import type { ReadinessDependencies, HealthCheckResult, HealthResponse } from "./types";
+import type {
+  ReadinessDependencies,
+  HealthCheckResult,
+  HealthResponse,
+  DatabaseProbeResult,
+  DatabaseStatus,
+  DatabaseErrorCode
+} from "./types";
 
 export const DEFAULT_DATABASE_TIMEOUT_MS = 3000;
 
 /**
  * Bounded readiness evaluation.
  * Injected ports verify configuration, database connectivity, and required schema.
+ * Enforces an independent bounded deadline even if the dependency ignores its timeout or never settles.
  * Distinguishes liveness (200) from readiness failure (503).
  * Never exposes credentials, tenant identifiers, or raw database errors.
  */
@@ -15,8 +23,15 @@ export async function evaluateReadiness(
   const timeoutMs = options?.timeoutMs ?? DEFAULT_DATABASE_TIMEOUT_MS;
   const now = options?.now ? options.now() : new Date();
 
-  // 1. Dependency check: Configuration
-  if (!deps.isConfigured()) {
+  // 1. Dependency check: Configuration (fail safely on exceptions)
+  let isConfigured = false;
+  try {
+    isConfigured = Boolean(deps.isConfigured());
+  } catch {
+    isConfigured = false;
+  }
+
+  if (!isConfigured) {
     const body: HealthResponse = {
       ok: false,
       status: "degraded",
@@ -35,50 +50,48 @@ export async function evaluateReadiness(
     return { httpStatus: 503, body };
   }
 
-  // 2. Dependency check: Bounded database and schema probe
+  // 2. Bounded probe execution with independent deadline and timer clearance
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  let probe: DatabaseProbeResult;
   try {
-    const probe = await deps.probeDatabase(timeoutMs);
+    const deadlinePromise = new Promise<DatabaseProbeResult>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve({
+          ok: false,
+          status: "timeout",
+          code: "database_timeout"
+        });
+      }, timeoutMs);
+    });
 
-    if (!probe.ok || probe.status !== "connected") {
-      const body: HealthResponse = {
-        ok: false,
-        status: "degraded",
-        service: "sahaj-core1-api",
-        stage: "phase-1-foundation",
-        probe: "readiness",
-        database: {
-          status: probe.status,
-          code: probe.code ?? "database_error",
-          ...(probe.latencyMs !== undefined ? { latency_ms: probe.latencyMs } : {})
-        },
-        voice: "disabled",
-        care_actions: "disabled",
-        emergency_ready: false,
-        timestamp: now.toISOString()
-      };
-      return { httpStatus: 503, body };
-    }
+    const probePromise = deps.probeDatabase(timeoutMs, controller.signal);
 
-    // 3. Healthy: Connected and schema verified
-    const body: HealthResponse = {
-      ok: true,
-      status: "ready",
-      service: "sahaj-core1-api",
-      stage: "phase-1-foundation",
-      probe: "readiness",
-      database: {
-        status: "connected",
-        latency_ms: probe.latencyMs ?? 0,
-        schema: probe.schemaOk ? "present" : "missing"
-      },
-      voice: "disabled",
-      care_actions: "disabled",
-      emergency_ready: false,
-      timestamp: now.toISOString()
-    };
-    return { httpStatus: 200, body };
+    probe = await Promise.race([probePromise, deadlinePromise]);
   } catch {
-    // Catch-all safety: Ensure no unexpected exception leaks out or exposes internal errors
+    probe = {
+      ok: false,
+      status: "unhealthy",
+      code: "database_error"
+    };
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+
+  // 3. Evaluate probe result: requires ok === true, status === "connected", and schemaOk === true
+  const isReady = probe.ok === true && probe.status === "connected" && probe.schemaOk === true;
+
+  if (!isReady) {
+    const isMissingSchema = probe.schemaOk === false || probe.status === "missing_schema";
+    const dbStatus: DatabaseStatus = isMissingSchema ? "missing_schema" : probe.status;
+    const dbCode: DatabaseErrorCode = isMissingSchema
+      ? "schema_missing"
+      : (probe.code ?? "database_error");
+
     const body: HealthResponse = {
       ok: false,
       status: "degraded",
@@ -86,8 +99,9 @@ export async function evaluateReadiness(
       stage: "phase-1-foundation",
       probe: "readiness",
       database: {
-        status: "unhealthy",
-        code: "database_error"
+        status: dbStatus,
+        code: dbCode,
+        ...(probe.latencyMs !== undefined ? { latency_ms: probe.latencyMs } : {})
       },
       voice: "disabled",
       care_actions: "disabled",
@@ -96,4 +110,23 @@ export async function evaluateReadiness(
     };
     return { httpStatus: 503, body };
   }
+
+  // 4. Healthy: Connected and schema verified
+  const body: HealthResponse = {
+    ok: true,
+    status: "ready",
+    service: "sahaj-core1-api",
+    stage: "phase-1-foundation",
+    probe: "readiness",
+    database: {
+      status: "connected",
+      latency_ms: probe.latencyMs ?? 0,
+      schema: "present"
+    },
+    voice: "disabled",
+    care_actions: "disabled",
+    emergency_ready: false,
+    timestamp: now.toISOString()
+  };
+  return { httpStatus: 200, body };
 }

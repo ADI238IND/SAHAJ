@@ -1,12 +1,12 @@
 # Phase 1 Verification Guide
 
-This document describes how to execute local verification and how Codex can run remote acceptance verification without exposing secrets.
+This document describes how to execute local verification and how parent/Codex executes remote acceptance verification without exposing secrets.
 
 ---
 
 ## 1. Local Verification (Completed by Antigravity)
 
-Run these checks inside the repository / worktree:
+Run these checks inside the repository / worktree (`.worktrees/antigravity-foundation`):
 
 ```powershell
 # 1. Typecheck API package
@@ -19,25 +19,58 @@ pnpm --filter @sahaj/api test
 pnpm --filter @sahaj/api build
 ```
 
-### Local Test Coverage Summary:
-- `tests/health/readiness.test.ts`: 9 tests verifying:
-  - Database unconfigured / unavailable (503 `database_not_configured`)
-  - Configured but unreachable (503 `database_unreachable`)
-  - Missing schema detection (503 `schema_missing`)
-  - Bounded timeout abort (503 `database_timeout`)
-  - Transient failure recovery (transition from 503 to 200)
-  - Safe error bodies (zero credentials, tenant identifiers, or SQL leaks)
+### Local Test Coverage Summary (26 Health Tests):
+- `tests/health/readiness.test.ts` (13 tests):
+  - Database unconfigured / unavailable (HTTP 503 `database_not_configured`)
+  - Safe failure when `isConfigured` throws an exception (HTTP 503 without leaking error details)
+  - Configured but unreachable (HTTP 503 `database_unreachable`)
+  - Missing schema detection (HTTP 503 `schema_missing`)
+  - **Regression**: `connected + schemaOk=false` returns HTTP 503 degraded, never 200 ready
+  - Bounded timeout abort response (HTTP 503 `database_timeout`)
+  - **Independent bounded deadline**: Probe that never settles is cancelled and resolved via fake timers to HTTP 503 `database_timeout`
+  - Transient failure recovery: transition from 503 failure to 200 ready
+  - Dynamic recovery after a never-resolving timeout failure using fake timers
+  - Safe error bodies (zero leaks of credentials, connection strings, tenant UUIDs, or SQL traces)
   - Disabled care actions (`emergency_ready: false`, `care_actions: "disabled"`, `voice: "disabled"`)
   - Liveness vs readiness distinction (liveness 200 vs readiness 503)
-  - Unhandled exception containment
-- `tests/health/ports.test.ts`: 5 tests verifying mock Supabase client interactions, AbortSignal handling, error codes (42P01), and environment variable checks without network calls.
-- `tests/health/routes.test.ts`: 5 tests verifying Next.js GET route handlers, query parameter handling, and `Cache-Control: no-store` headers.
+  - Unhandled exception containment in probe calls
+- `tests/health/ports.test.ts` (8 tests):
+  - Configuration detection from environment variables
+  - Successful RPC call consuming `public.foundation_readiness()` JSON contract (`{ database: 'connected', schema_ready: true, schema_version: 'foundation-v4' }`)
+  - Missing schema detection when RPC returns `schema_ready = false`
+  - Missing RPC function detection (PostgREST PGRST202 or PostgreSQL 42883)
+  - Malformed or invalid RPC response handling (defensive JSON schema validation)
+  - SDK abort `{ error }` response recognized as `database_timeout`
+  - Thrown SDK `AbortError` recognized as `database_timeout`
+  - Network failure (ECONNREFUSED / fetch failure) recognized as `database_unreachable`
+- `tests/health/routes.test.ts` (5 tests):
+  - `GET /api/health?probe=liveness` returns 200 with `Cache-Control: no-store`
+  - `GET /api/health` defaults to readiness probe and returns 200 when ready
+  - `GET /api/health` returns 503 when readiness probe fails
+  - `GET /api/health/liveness` dedicated route returns 200 with `no-store`
+  - `GET /api/health/readiness` dedicated route returns 503 when dependency fails
 
-Total API test suite: 195 tests passing across 15 test files.
+Total API test suite: 202 tests passing across 15 test files.
 
 ---
 
-## 2. Remote Database Acceptance Execution (Codex Action)
+## 2. Schema Dependency & Final Migration
+
+- **RPC Contract**: The API readiness probe calls the service-only `public.foundation_readiness()` procedure.
+- **Payload Schema**:
+  ```json
+  {
+    "database": "connected",
+    "schema_ready": true,
+    "schema_version": "foundation-v4"
+  }
+  ```
+- **Parent Dependency**: Parent will provide the exact readiness migration filename for `public.foundation_readiness()`.
+- **Defensive Handling**: The API treats any missing RPC, invalid version, unparseable payload, or `schema_ready: false` as HTTP 503 `missing_schema`.
+
+---
+
+## 3. Remote Database Acceptance Execution (Parent Action)
 
 Execute the rollback-only SQL acceptance test against the connected Supabase instance:
 
@@ -52,38 +85,25 @@ Or via `psql`:
 psql "$SUPABASE_DB_URL" -f infra/supabase/tests/phase1_security_acceptance.sql
 ```
 
-**Expected Outcome**:
-- Script executes all 6 sections (RLS checks, schema/bucket privacy, runtime role least privilege, service RPC execution checks, synthetic tenant boundary fixtures).
-- Reaches the final `rollback;` statement.
-- Zero exceptions raised; output confirms `ROLLBACK`. Zero persistent rows left in the database.
+**Key Assertions Verified**:
+1. Non-vacuous table existence: All 33 tables across `public`, `sahaj_private`, and `sahaj_checkpoints` must exist before checking RLS.
+2. All 33 tables have `relrowsecurity = true`.
+3. Schema isolation: `anon` has no USAGE on `sahaj_private`; PUBLIC (grantee = 0) has no USAGE/CREATE on `sahaj_private`; `authenticated` USAGE is preserved for `has_role`/`is_person` RLS helpers; browser roles have zero direct table privileges on `call_content`, `voice_content`, or `private_items`.
+4. Storage buckets: All 3 care buckets (`sahaj-voice`, `sahaj-recordings`, `sahaj-lines`) must exist AND be private (`public = false`).
+5. Checkpoint least privilege: `sahaj_atlas_runtime` lacks database CREATE, lacks application table access, and `sahaj_checkpoints` has exactly 4 tables.
+6. Non-vacuous RPC existence: All 13 service-only RPCs must exist; neither `anon`, `authenticated`, nor `PUBLIC` has EXECUTE; only `service_role` has EXECUTE.
+7. Tenant boundary fixtures: Validates anonymous default deny, Family A vs Family B isolation, intra-tenant role fencing, and immediate revocation cutoff.
+8. Rolls back cleanly with zero persistent residue.
 
 ---
 
-## 3. Safe Deployed Health Verification (Codex Action)
+## 4. Safe Deployed Health Verification (Parent Action)
 
 To verify the deployed API without reading or logging sensitive tokens or environment variables, execute `docs/phase1/verify_live.sh` or `docs/phase1/verify_live.ps1`.
 
-### Using Bash:
-
-```bash
-./docs/phase1/verify_live.sh https://<deployed-domain> [optional-vercel-protection-bypass-token]
-```
-
-### Using PowerShell:
-
-```powershell
-./docs/phase1/verify_live.ps1 -BaseUrl "https://<deployed-domain>" [-BypassSecret "optional-secret"]
-```
-
-### Checks performed:
-1. `GET /api/health/liveness`:
-   - Validates HTTP status is 200.
-   - Validates `Cache-Control` header contains `no-store`.
-   - Validates JSON body has `ok: true`, `probe: "liveness"`, `emergency_ready: false`.
-2. `GET /api/health?probe=liveness`:
-   - Validates query parameter liveness probe returns HTTP 200.
-3. `GET /api/health` (Readiness Probe):
-   - Validates `Cache-Control` header contains `no-store`.
-   - If connected: validates HTTP status 200, `status: "ready"`, `database.status: "connected"`, `database.schema: "present"`.
-   - Validates response does NOT leak any credentials, connection strings, or tenant identifiers.
-   - Validates `emergency_ready` is strictly `false` and `care_actions` is `"disabled"`.
+### Explicit Remaining Live Readiness Evidence:
+1. Apply the parent's `foundation_readiness()` migration.
+2. Run `infra/supabase/tests/phase1_security_acceptance.sql` against the connected Supabase database.
+3. Deploy the integration commit to Vercel.
+4. Verify protected `GET /api/health` returns HTTP 200 with `database.status = "connected"` and `database.schema = "present"`.
+5. Note: No provider or Atlas feature readiness is claimed in Phase 1; external care actions and voice remain disabled.
