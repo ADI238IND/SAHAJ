@@ -1,7 +1,7 @@
 import { consentIsCurrent } from "./consent";
 import {
   MAX_SIGNED_URL_SECONDS, RECORDING_CONSENT_PURPOSE, voiceShareConsentPurpose,
-  type DenyCode, type MediaBucket, type MediaDeps, type MediaOptions, type MediaResult, type Membership,
+  type DenyCode, type ConsentRow, type MediaAuthorizationContext, type MediaBucket, type MediaDeps, type MediaOptions, type MediaResult, type Membership,
 } from "./contracts";
 import { isUuid, objectFitsBucket, validateObjectPath } from "./paths";
 
@@ -36,18 +36,34 @@ export function createMediaService(deps: MediaDeps, options: MediaOptions = {}) 
     return m;
   }
 
-  async function sign(bucket: MediaBucket, familyId: string, rawPath: unknown, expiresAt: string): Promise<MediaResult> {
+  type Facts = Omit<MediaAuthorizationContext, "object" | "now">;
+  const consentFacts = (c: ConsentRow): Facts["consent"] =>
+    ({ id: c.id, purpose: c.purpose, personId: c.personId, callId: c.callId, grantedAt: c.createdAt });
+
+  async function sign(bucket: MediaBucket, familyId: string, rawPath: unknown, expiresAt: string, facts: Facts): Promise<MediaResult> {
     const path = validateObjectPath(rawPath, familyId);
     if (!path) return stop("invalid_object");
     const expiry = Date.parse(expiresAt);
     if (!Number.isFinite(expiry)) return stop("invalid_object");
     if (expiry <= deps.now().getTime()) return stop("expired");
+
+    // Trusted authorization decision comes before any storage access. Only an explicit "allow" passes.
+    let decision: unknown;
+    try { decision = await deps.authorizeMedia({ ...facts, object: { bucket, path, expiresAt }, now: deps.now().toISOString() }); }
+    catch { return stop("forbidden"); }
+    if (decision !== "allow") return stop("forbidden");
+
     const info = await deps.storage.stat(bucket, path);
     if (!info) return stop("not_found");
     if (!objectFitsBucket(bucket, info)) return stop("invalid_object");
-    const url = await deps.storage.createSignedUrl(bucket, path, ttl);
+
+    // Lifetime is bounded by the retention deadline, measured after the slow storage call.
+    const remaining = Math.floor((expiry - deps.now().getTime()) / 1000);
+    const seconds = Math.min(ttl, remaining);
+    if (!(seconds >= 1)) return stop("expired");
+    const url = await deps.storage.createSignedUrl(bucket, path, seconds);
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return stop("unavailable");
-    return { ok: true, url, expiresInSeconds: ttl };
+    return { ok: true, url, expiresInSeconds: seconds };
   }
 
   async function guarded(run: () => Promise<MediaResult>): Promise<MediaResult> {
@@ -78,7 +94,12 @@ export function createMediaService(deps: MediaDeps, options: MediaOptions = {}) 
       }
       const content = await deps.repo.getVoiceContent(post.familyId, post.id);
       if (!content || content.familyId !== post.familyId || content.voicePostId !== post.id) return stop("not_found");
-      return sign("sahaj-voice", post.familyId, content.objectPath, content.expiresAt);
+      return sign("sahaj-voice", post.familyId, content.objectPath, content.expiresAt, {
+        action: "read_voice_media", familyId: post.familyId,
+        actor: { userId, personId: m.personId, role: m.role },
+        subject: { kind: "voice_post", id: post.id, senderId: post.senderId, recipientId: post.recipientId },
+        consent: consentFacts(linked!),
+      });
     }),
 
     /** Call recording: only the recorded parent themself, with current call-scoped recording consent. */
@@ -99,7 +120,12 @@ export function createMediaService(deps: MediaDeps, options: MediaOptions = {}) 
       if (!consentIsCurrent({ linked, history, familyId: call.familyId, personId: call.personId, purpose: RECORDING_CONSENT_PURPOSE, callId: call.id, now: deps.now(), maxAgeMs: options.consentMaxAgeMs })) {
         return stop("consent_required");
       }
-      return sign("sahaj-recordings", call.familyId, content.recordingObjectPath, content.expiresAt);
+      return sign("sahaj-recordings", call.familyId, content.recordingObjectPath, content.expiresAt, {
+        action: "read_call_recording", familyId: call.familyId,
+        actor: { userId, personId: m.personId, role: m.role },
+        subject: { kind: "call", id: call.id, personId: call.personId },
+        consent: consentFacts(linked!),
+      });
     }),
   };
 }

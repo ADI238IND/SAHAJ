@@ -3,8 +3,8 @@ import type {
   AuthPort, CallContentRow, CallRow, ConsentRow, MediaBucket, MediaDeps, MediaRepository, Membership,
   ObjectInfo, StorageSigner, VoiceContentRow, VoicePostRow,
 } from "./contracts";
+import { denyAllAuthorizer } from "./authorization";
 import { isBucket } from "./paths";
-
 type Row = Record<string, unknown>;
 const str = (v: unknown): string => { if (typeof v !== "string") throw new Error("bad_row"); return v; };
 const strOrNull = (v: unknown): string | null => (v === null || v === undefined ? null : str(v));
@@ -20,6 +20,13 @@ export function supabaseRepository(db: SupabaseClient): MediaRepository {
     id: str(r.id), familyId: str(r.family_id), personId: str(r.person_id), callId: strOrNull(r.call_id),
     purpose: str(r.purpose), answer: r.answer === true, version: str(r.version), createdAt: str(r.created_at),
   });
+  const rpcObject = async (query: PromiseLike<{ data: unknown; error: unknown }>): Promise<Row | null> => {
+    const { data, error } = await query;
+    if (error) throw new Error("db_error");
+    if (data === null || data === undefined) return null;
+    if (typeof data !== "object" || Array.isArray(data)) throw new Error("bad_row");
+    return data as Row;
+  };
   const COLS = "id,family_id,person_id,call_id,purpose,answer,version,created_at";
   return {
     async getMembership(userId, familyId): Promise<Membership | null> {
@@ -32,19 +39,23 @@ export function supabaseRepository(db: SupabaseClient): MediaRepository {
       return r && { id: str(r.id), familyId: str(r.family_id), senderId: str(r.sender_id), recipientId: str(r.recipient_id), consentId: str(r.consent_id) };
     },
     async getVoiceContent(familyId, postId): Promise<VoiceContentRow | null> {
-      // Requires sahaj_private to be exposed to PostgREST, or an equivalent service-only RPC. Fails closed otherwise.
-      const r = await one(db.schema("sahaj_private").from("voice_content").select("family_id,voice_post_id,object_path,expires_at")
-        .eq("family_id", familyId).eq("voice_post_id", postId).maybeSingle());
-      return r && { familyId: str(r.family_id), voicePostId: str(r.voice_post_id), objectPath: str(r.object_path), expiresAt: str(r.expires_at) };
+      // Service-only public RPC; sahaj_private is never exposed. Missing function => db_error => fail closed.
+      const r = await rpcObject(db.rpc("get_voice_media_metadata", { p_family_id: familyId, p_post_id: postId }));
+      if (!r) return null;
+      const row = { familyId: str(r.family_id), voicePostId: str(r.voice_post_id), objectPath: str(r.object_path), expiresAt: str(r.expires_at) };
+      if (row.familyId !== familyId || row.voicePostId !== postId) throw new Error("bad_row");
+      return row;
     },
     async getCall(callId): Promise<CallRow | null> {
       const r = await one(db.from("calls").select("id,family_id,person_id").eq("id", callId).maybeSingle());
       return r && { id: str(r.id), familyId: str(r.family_id), personId: str(r.person_id) };
     },
     async getCallContent(familyId, callId): Promise<CallContentRow | null> {
-      const r = await one(db.schema("sahaj_private").from("call_content").select("family_id,call_id,consent_id,recording_object_path,expires_at")
-        .eq("family_id", familyId).eq("call_id", callId).maybeSingle());
-      return r && { familyId: str(r.family_id), callId: str(r.call_id), consentId: str(r.consent_id), recordingObjectPath: strOrNull(r.recording_object_path), expiresAt: str(r.expires_at) };
+      const r = await rpcObject(db.rpc("get_call_media_metadata", { p_family_id: familyId, p_call_id: callId }));
+      if (!r) return null;
+      const row = { familyId: str(r.family_id), callId: str(r.call_id), consentId: str(r.consent_id), recordingObjectPath: strOrNull(r.recording_object_path), expiresAt: str(r.expires_at) };
+      if (row.familyId !== familyId || row.callId !== callId) throw new Error("bad_row");
+      return row;
     },
     async getConsent(familyId, consentId) {
       const r = await one(db.from("consents").select(COLS).eq("family_id", familyId).eq("id", consentId).maybeSingle());
@@ -89,5 +100,5 @@ export function defaultMediaDeps(): MediaDeps {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("database_not_configured");
   const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  return { auth: supabaseAuth(db), repo: supabaseRepository(db), storage: supabaseStorage(db), now: () => new Date() };
+  return { auth: supabaseAuth(db), repo: supabaseRepository(db), storage: supabaseStorage(db), authorizeMedia: denyAllAuthorizer, now: () => new Date() };
 }

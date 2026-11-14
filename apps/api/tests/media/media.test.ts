@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CallContentRow, ConsentRow, MediaDeps, Membership, ObjectInfo } from "../../src/lib/media/contracts";
+import type { CallContentRow, ConsentRow, MediaAuthorizationContext, MediaDeps, Membership, ObjectInfo } from "../../src/lib/media/contracts";
 import { RECORDING_CONSENT_PURPOSE, voiceShareConsentPurpose } from "../../src/lib/media/contracts";
 import { createMediaHandler } from "../../src/lib/media/handler";
 import { objectFitsBucket, validateObjectPath } from "../../src/lib/media/paths";
@@ -31,9 +31,13 @@ function world(over: { memberships?: Membership[]; consents?: ConsentRow[]; info
   ];
   const users = over.users ?? { "tok-parent": PARENT_U, "tok-child": CHILD_U, "tok-circle": CIRCLE_U, "tok-other": OTHER_U };
   const signed: Array<[string, string, number]> = [];
+  const events: string[] = [];
+  const contexts: MediaAuthorizationContext[] = [];
+  const clock = { at: NOW.getTime() };
   const callContent: CallContentRow = { familyId: FAM, callId: CALL, consentId: CONSENT_REC, recordingObjectPath: over.recPath === undefined ? REC_PATH : over.recPath, expiresAt: over.recExpires ?? FUTURE };
   const deps: MediaDeps = {
-    now: () => NOW,
+    now: () => new Date(clock.at),
+    authorizeMedia: async (c) => { events.push("authorize"); contexts.push(c); return "allow"; },
     auth: { verifyBearer: async (t) => (users[t] ? { userId: users[t] } : null) },
     repo: {
       getMembership: async (u, f) => memberships.find((m) => m.userId === u && m.familyId === f) ?? null,
@@ -45,11 +49,11 @@ function world(over: { memberships?: Membership[]; consents?: ConsentRow[]; info
       listConsentHistory: async (f, p, purpose) => consents.filter((x) => x.familyId === f && x.personId === p && x.purpose === purpose),
     },
     storage: {
-      stat: async () => (over.info === undefined ? { size: 1000, contentType: "audio/mpeg" } : over.info),
-      createSignedUrl: async (b, p, s) => { signed.push([b, p, s]); return "https://storage.invalid/signed?token=SYNTHETIC"; },
+      stat: async () => { events.push("stat"); return over.info === undefined ? { size: 1000, contentType: "audio/mpeg" } : over.info; },
+      createSignedUrl: async (b, p, s) => { events.push("sign"); signed.push([b, p, s]); return "https://storage.invalid/signed?token=SYNTHETIC"; },
     },
   };
-  return { deps, signed, consents };
+  return { deps, signed, consents, events, contexts, clock };
 }
 
 describe("voice post access", () => {
@@ -233,5 +237,118 @@ describe("HTTP handler", () => {
     expect(await bad.text()).not.toContain("SECRET");
     await call("Bearer tok-child"); await call("Bearer nope");
     for (const s of spies) { expect(s).not.toHaveBeenCalled(); s.mockRestore(); }
+  });
+});
+
+describe("trusted authorization decision", () => {
+  it("runs after path/expiry checks and before storage stat or signing, with explicit context", async () => {
+    const w = world();
+    expect((await createMediaService(w.deps).voicePost("tok-child", POST)).ok).toBe(true);
+    expect(w.events).toEqual(["authorize", "stat", "sign"]);
+    expect(w.contexts[0]).toMatchObject({
+      action: "read_voice_media", familyId: FAM,
+      actor: { userId: CHILD_U, personId: CHILD_P, role: "child" },
+      subject: { kind: "voice_post", id: POST, senderId: PARENT_P, recipientId: CHILD_P },
+      consent: { id: CONSENT_YES, personId: PARENT_P, purpose: voiceShareConsentPurpose(CHILD_P) },
+      object: { bucket: "sahaj-voice", path: PATH, expiresAt: FUTURE },
+    });
+  });
+  it("passes recording context", async () => {
+    const w = world();
+    await createMediaService(w.deps).callRecording("tok-parent", CALL);
+    expect(w.contexts[0]).toMatchObject({ action: "read_call_recording", subject: { kind: "call", id: CALL, personId: PARENT_P }, consent: { id: CONSENT_REC, callId: CALL }, object: { bucket: "sahaj-recordings" } });
+  });
+  it.each([["deny"], ["ask"], [undefined], [null], [true], ["ALLOW"], ["allow "]])("fails closed on decision %j", async (decision) => {
+    const w = world();
+    w.deps.authorizeMedia = async () => decision as never;
+    expect(await createMediaService(w.deps).voicePost("tok-child", POST)).toMatchObject({ ok: false, status: 403 });
+    expect(w.events).not.toContain("stat"); expect(w.signed).toEqual([]);
+  });
+  it("fails closed when the authorizer throws or rejects", async () => {
+    for (const fn of [() => { throw new Error("x"); }, async () => { throw new Error("x"); }]) {
+      const w = world();
+      w.deps.authorizeMedia = fn as never;
+      expect(await createMediaService(w.deps).callRecording("tok-parent", CALL)).toMatchObject({ ok: false, status: 403 });
+      expect(w.events).not.toContain("stat");
+    }
+  });
+  it("is not consulted for callers that fail earlier checks", async () => {
+    const w = world();
+    await createMediaService(w.deps).voicePost("tok-circle", POST);
+    await createMediaService(w.deps).voicePost("nope", POST);
+    expect(w.contexts).toEqual([]);
+  });
+});
+
+describe("call-scoped recording consent", () => {
+  const CALL_B = id(62);
+  const rec = (o: Partial<ConsentRow>) => consent({ purpose: RECORDING_CONSENT_PURPOSE, callId: CALL, ...o });
+  const run = (consents: ConsentRow[]) => createMediaService(world({ consents }).deps).callRecording("tok-parent", CALL);
+  const A_YES = rec({ id: CONSENT_REC, createdAt: "2026-11-01T00:00:00Z" });
+  it("A yes then A no then B yes stays denied", async () => {
+    expect(await run([A_YES, rec({ id: id(70), answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(71), callId: CALL_B, createdAt: "2026-11-03T00:00:00Z" })]))
+      .toMatchObject({ ok: false, code: "consent_required" });
+  });
+  it("a refusal for call B does not revoke call A", async () => {
+    expect((await run([A_YES, rec({ id: id(72), callId: CALL_B, answer: false, createdAt: "2026-11-03T00:00:00Z" })])).ok).toBe(true);
+  });
+  it("a later explicit global refusal revokes", async () => {
+    expect(await run([A_YES, rec({ id: id(73), callId: null, answer: false, createdAt: "2026-11-02T00:00:00Z" })])).toMatchObject({ code: "consent_required" });
+  });
+  it("a global refusal followed by an other-call yes stays denied", async () => {
+    expect(await run([A_YES, rec({ id: id(74), callId: null, answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(75), callId: CALL_B, createdAt: "2026-11-04T00:00:00Z" })]))
+      .toMatchObject({ code: "consent_required" });
+  });
+  it("a global yes never revives a refused call", async () => {
+    expect(await run([A_YES, rec({ id: id(76), answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(77), callId: null, createdAt: "2026-11-05T00:00:00Z" })]))
+      .toMatchObject({ code: "consent_required" });
+  });
+  it("same-call regrant after refusal restores access (linked row is the original yes)", async () => {
+    expect((await run([A_YES, rec({ id: id(78), answer: false, createdAt: "2026-11-02T00:00:00Z" }), rec({ id: id(79), createdAt: "2026-11-03T00:00:00Z" })])).ok).toBe(true);
+  });
+  it("a global refusal older than the call-A yes does not block it", async () => {
+    expect((await run([rec({ id: id(80), callId: null, answer: false, createdAt: "2026-10-01T00:00:00Z" }), A_YES])).ok).toBe(true);
+  });
+  it("tied timestamps resolve to refusal, for call and global refusals", async () => {
+    expect(await run([A_YES, rec({ id: id(81), answer: false, createdAt: A_YES.createdAt })])).toMatchObject({ code: "consent_required" });
+    expect(await run([A_YES, rec({ id: id(82), callId: null, answer: false, createdAt: A_YES.createdAt })])).toMatchObject({ code: "consent_required" });
+  });
+  it("voice grants stay recipient-specific and independent of call scope", async () => {
+    const w = world({ consents: [consent({ callId: CALL_B })] });
+    expect((await createMediaService(w.deps).voicePost("tok-child", POST)).ok).toBe(true);
+  });
+});
+
+describe("retention-bound URL lifetime", () => {
+  const at = (s: number) => new Date(NOW.getTime() + s * 1000).toISOString();
+  it.each([[1, 1], [2, 2], [59, 59], [60, 60], [61, 60], [3600, 60]])("retention in %ds gives expires_in %d", async (retention, expected) => {
+    const w = world({ expires: at(retention) });
+    const r = await createMediaService(w.deps).voicePost("tok-child", POST);
+    expect(r).toMatchObject({ ok: true, expiresInSeconds: expected });
+    expect(w.signed[0][2]).toBe(expected);
+  });
+  it("floors fractional seconds and rejects under one second", async () => {
+    const w = world({ expires: new Date(NOW.getTime() + 1999).toISOString() });
+    expect(await createMediaService(w.deps).voicePost("tok-child", POST)).toMatchObject({ ok: true, expiresInSeconds: 1 });
+    const w2 = world({ expires: new Date(NOW.getTime() + 999).toISOString() });
+    expect(await createMediaService(w2.deps).voicePost("tok-child", POST)).toMatchObject({ ok: false, code: "expired" });
+    expect(w2.signed).toEqual([]);
+  });
+  it("rechecks the clock after the storage call", async () => {
+    const w = world({ expires: at(2) });
+    const stat = w.deps.storage.stat;
+    w.deps.storage.stat = async (b, p) => { const r = await stat(b, p); w.clock.at += 1500; return r; };
+    expect(await createMediaService(w.deps).voicePost("tok-child", POST)).toMatchObject({ ok: false, code: "expired" });
+    expect(w.signed).toEqual([]);
+    const w2 = world({ expires: at(5) });
+    const stat2 = w2.deps.storage.stat;
+    w2.deps.storage.stat = async (b, p) => { const r = await stat2(b, p); w2.clock.at += 1500; return r; };
+    expect(await createMediaService(w2.deps).voicePost("tok-child", POST)).toMatchObject({ ok: true, expiresInSeconds: 3 });
+  });
+  it("honors a shorter configured TTL and applies to recordings", async () => {
+    const w = world({ recExpires: at(45) });
+    expect(await createMediaService(w.deps, { signedUrlSeconds: 20 }).callRecording("tok-parent", CALL)).toMatchObject({ expiresInSeconds: 20 });
+    const w2 = world({ recExpires: at(45) });
+    expect(await createMediaService(w2.deps).callRecording("tok-parent", CALL)).toMatchObject({ expiresInSeconds: 45 });
   });
 });

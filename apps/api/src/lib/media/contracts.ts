@@ -65,10 +65,30 @@ export interface StorageSigner {
   createSignedUrl(bucket: MediaBucket, path: string, expiresInSeconds: number): Promise<string | null>;
 }
 
+/**
+ * Facts the service has already proven from live rows, handed to the trusted authorization decision
+ * (to be backed by @sahaj/gate / Cedar). Object size and MIME are not included: the decision runs
+ * before any storage call.
+ */
+export interface MediaAuthorizationContext {
+  action: "read_voice_media" | "read_call_recording";
+  familyId: string;
+  actor: { userId: string; personId: string; role: MemberRole };
+  subject: { kind: "voice_post" | "call"; id: string; senderId?: string; recipientId?: string; personId?: string };
+  consent: { id: string; purpose: string; personId: string; callId: string | null; grantedAt: string };
+  object: { bucket: MediaBucket; path: string; expiresAt: string };
+  now: string;
+}
+export type MediaDecision = "allow" | "ask" | "deny";
+/** Only the exact value "allow" permits a read. Anything else, or a thrown error, denies. */
+export type MediaAuthorizer = (context: MediaAuthorizationContext) => Promise<MediaDecision>;
+
 export interface MediaDeps {
   auth: AuthPort;
   repo: MediaRepository;
   storage: StorageSigner;
+  /** Mandatory. No default exists in the service. */
+  authorizeMedia: MediaAuthorizer;
   now: () => Date;
 }
 export interface MediaOptions {
