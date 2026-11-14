@@ -79,7 +79,8 @@ it("queries this call's and call-independent consents separately, scoped by fami
   const rows = await providerStore().findConsents("f", "p", "call-1", "call_recording");
   expect(calls.map((c) => c.table)).toEqual(["consents", "consents"]);
   expect(calls[0].filters).toMatchObject({ family_id: "f", person_id: "p", purpose: "call_recording", call_id: "call-1" });
-  expect(calls[1].filters).toMatchObject({ family_id: "f", person_id: "p", purpose: "call_recording", call_id: null });
+  expect(calls[1].filters).toMatchObject({ family_id: "f", person_id: "p", purpose: "call_recording", call_id: null, answer: false });
+  expect(calls[0].filters).not.toHaveProperty("answer");
   expect(rows[0]).toMatchObject({ id: "c1", callId: null, answer: false });
   failure = { code: "x" };
   await expect(providerStore().findConsents("f", "p", "call-1", "call_recording")).rejects.toMatchObject({ status: 503 });

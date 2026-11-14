@@ -38,7 +38,7 @@ export interface ProviderStore {
  * - only rows for this family, person and purpose count; rows for other calls are ignored, so a later yes
  *   on a different call never revives this call;
  * - the newest call-specific row must be an affirmative answer on the required version;
- * - a call-independent refusal at or after that answer overrides it. Ties go to refusal.
+ * - the newest call-independent REFUSAL at or after that answer overrides it (ties go to refusal). Call-independent\n *   affirmations are ignored: they never restore consent a refusal ended.
  * Returns the consent row id, or null when collection is not proven.
  */
 export function effectiveConsent(rows: ConsentRow[], want: { familyId: string; personId: string; callId: string; purpose: ConsentPurpose; version: string }): string | null {
@@ -49,8 +49,9 @@ export function effectiveConsent(rows: ConsentRow[], want: { familyId: string; p
   const newest = (list: ConsentRow[]) => [...list].sort((a, b) => at(a) - at(b) || Number(b.answer) - Number(a.answer)).at(-1);
   const call = newest(mine.filter((r) => r.callId === want.callId));
   if (!call || !call.answer || call.version !== want.version) return null;
-  const global = newest(mine.filter((r) => r.callId === null));
-  if (global && !global.answer && at(global) >= at(call)) return null;
+  // Only refusals matter here: a later global yes must never restore a consent that a refusal ended.
+  const refusal = newest(mine.filter((r) => r.callId === null && !r.answer));
+  if (refusal && at(refusal) >= at(call)) return null;
   return call.id;
 }
 

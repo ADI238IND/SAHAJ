@@ -116,6 +116,14 @@ describe("twilio recording", () => {
     await denied([consent(), consent({ id: "r1", answer: false, createdAt: "2026-11-14T11:00:00.000Z" })]);
     await denied([consent(), consent({ id: "r1", answer: false, createdAt: "2026-11-14T11:00:00.000Z" }), consent({ id: "y2", callId: other, createdAt: "2026-11-14T12:00:00.000Z" })]);
   });
+  it("a later global yes never restores consent ended by a global refusal, even with 25 newer global yes rows", async () => {
+    const yes = (i: number) => consent({ id: `gy${i}`, callId: null, createdAt: new Date(Date.UTC(2026, 10, 14, 12, 0, i)).toISOString() });
+    const refusal = consent({ id: "g", callId: null, answer: false, createdAt: "2026-11-14T11:00:00.000Z" });
+    await denied([consent({ createdAt: "2026-11-14T10:00:00.000Z" }), refusal, yes(0)]);
+    await denied([consent({ createdAt: "2026-11-14T10:00:00.000Z" }), refusal, ...Array.from({ length: 25 }, (_, i) => yes(i))]);
+    const store = fakeStore({ findConsents: async () => [refusal, consent({ createdAt: "2026-11-14T11:30:00.000Z" }), yes(1)] });
+    expect((await send(handleTwilioRecording, recForm(), RECORDING_URL, store)).status).toBe(200);
+  });
   it("call-independent refusal at or after the yes blocks, a later call-specific yes re-allows", async () => {
     await denied([consent(), consent({ id: "g", callId: null, answer: false, createdAt: "2026-11-14T10:00:00.000Z" })]);
     await denied([consent(), consent({ id: "g", callId: null, answer: false, createdAt: "2026-11-14T10:30:00.000Z" })]);

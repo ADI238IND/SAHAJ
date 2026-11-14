@@ -41,10 +41,10 @@ export function providerStore(): ProviderStore {
       return who && data ? { ...who, callId: String(data.id), aiDisclosed: !!data.ai_disclosed_at } : null;
     },
     async findConsents(familyId, personId, callId, purpose) {
-      // Two bounded queries so call-independent rows cannot crowd out this call's newest row.
+      // Two bounded queries. The global one selects refusals only, so newer global affirmations cannot crowd a refusal out of the limit.
       const base = () => db.from("consents").select(CONSENT_COLUMNS).eq("family_id", familyId).eq("person_id", personId)
         .eq("purpose", purpose).order("created_at", { ascending: false }).limit(20);
-      const [specific, global] = await Promise.all([base().eq("call_id", callId), base().is("call_id", null)]);
+      const [specific, global] = await Promise.all([base().eq("call_id", callId), base().is("call_id", null).eq("answer", false)]);
       if (specific.error || global.error) throw new WebhookError("consent_lookup_failed", 503);
       return [...(specific.data ?? []), ...(global.data ?? [])].map(consentRow);
     },

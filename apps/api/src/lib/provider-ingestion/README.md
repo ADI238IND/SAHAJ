@@ -48,7 +48,7 @@ Same event id and identical payload is accepted unchanged. Same id with a differ
 
 `consents` is append-only; the newest matching row decides. For a call, per purpose (`call_recording`, `call_transcript`):
 only rows with the same family, person and purpose count. The newest row with this exact `call_id` must be `answer=true` on
-`CALL_CONSENT_VERSION`. A newest call-independent row (`call_id` null) with `answer=false` at or after that time overrides it
+`CALL_CONSENT_VERSION`. The newest call-independent refusal (`call_id` null, `answer=false`) at or after that time overrides it; call-independent affirmations are ignored and never restore consent. The storage query for global rows selects refusals only
 (ties go to refusal); a later call-specific yes overrides an earlier global refusal. Rows for other calls are ignored, so a
 yes on another call never revives a revoked consent here. The `calls` row must belong to the same family and person as the
 verified identity.
