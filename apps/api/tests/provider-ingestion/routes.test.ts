@@ -20,6 +20,7 @@ beforeEach(() => {
   vi.stubEnv("SARVAM_APP_ID", "app-1");
   vi.stubEnv("SARVAM_AGENT_NUMBER", "+918000000000");
   vi.stubEnv("SARVAM_DEPLOYMENT_ID", "dep-1");
+  vi.stubEnv("CALL_CONSENT_VERSION", "consent-v1");
   vi.stubEnv("TELECMI_APP_ID", "123");
   vi.stubEnv("TELECMI_VIRTUAL_NUMBER", "918000000001");
   vi.stubEnv("TWILIO_ACCOUNT_SID", ACCOUNT_SID);

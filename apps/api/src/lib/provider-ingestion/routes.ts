@@ -24,7 +24,7 @@ export async function sarvamPostCall(request: Request, { params }: Params) {
   if (!appId || !agentDigits) return notConfigured();
   try {
     const raw = await readWebhookBody(request, LIMITS.sarvam);
-    return send(await handleSarvam(raw, { appId, agentDigits, deploymentId: deploymentId || undefined }, providerStore));
+    return send(await handleSarvam(raw, { appId, agentDigits, deploymentId: deploymentId || undefined, consentVersion: process.env.CALL_CONSENT_VERSION || undefined }, providerStore));
   } catch (error) { return send(toResult(error)); }
 }
 
@@ -43,7 +43,7 @@ export async function missedCall(request: Request, { params }: Params) {
 function twilioConfig(): TwilioConfig | null {
   const { TWILIO_ACCOUNT_SID: accountSid, TWILIO_AUTH_TOKEN: authToken } = process.env;
   if (!accountSid || !authToken) return null;
-  return { accountSid, authToken, statusUrl: process.env.TWILIO_STATUS_CALLBACK_URL, recordingUrl: process.env.TWILIO_RECORDING_CALLBACK_URL };
+  return { accountSid, authToken, statusUrl: process.env.TWILIO_STATUS_CALLBACK_URL, recordingUrl: process.env.TWILIO_RECORDING_CALLBACK_URL, consentVersion: process.env.CALL_CONSENT_VERSION || undefined };
 }
 
 export async function twilioStatus(request: Request) {

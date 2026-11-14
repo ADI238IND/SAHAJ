@@ -11,7 +11,7 @@ heard, accepted, or that a recording was retrieved.
 | --- | --- | --- |
 | Sarvam (unsigned) | URL secret, timing-safe, wrong => 404 | Configured app id and agent number. Outbound: server-stored `attempt` binding for that app. Inbound: configured deployment id and a registered `contact`. |
 | TeleCMI (unsigned) | URL secret, timing-safe, wrong => 404 | Configured appid and virtual number, and a registered `contact` caller. |
-| Twilio | `X-Twilio-Signature` (HMAC-SHA1) over the configured public URL plus raw form parameters | Configured AccountSid, and a `calls` row with `provider='twilio'` and `external_id=CallSid`. Recording events also need `ai_disclosed_at` and `recording_consent_at`. |
+| Twilio | `X-Twilio-Signature` (HMAC-SHA1) over the configured public URL plus raw form parameters | Configured AccountSid, and a `calls` row with `provider='twilio'` and `external_id=CallSid`. Recording events also need `ai_disclosed_at` and an effective `call_recording` consent (below). |
 
 IDs alone never prove the sender. Unknown identity => 403 with no write.
 
@@ -19,7 +19,7 @@ IDs alone never prove the sender. Unknown identity => 403 with no write.
 
 `SARVAM_HOOK_SECRET`, `SARVAM_APP_ID`, `SARVAM_AGENT_NUMBER`, `SARVAM_DEPLOYMENT_ID` (inbound only),
 `MISSEDCALL_HOOK_SECRET`, `TELECMI_APP_ID`, `TELECMI_VIRTUAL_NUMBER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-`TWILIO_STATUS_CALLBACK_URL`, `TWILIO_RECORDING_CALLBACK_URL` (exact public https URLs registered with Twilio),
+`TWILIO_STATUS_CALLBACK_URL`, `TWILIO_RECORDING_CALLBACK_URL` (exact public https URLs registered with Twilio), `CALL_CONSENT_VERSION` (required `consents.version`; unset means no consent is ever effective),
 plus existing `WEBHOOK_ENCRYPTION_KEY`, `IDENTITY_HASH_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
 These names are new and are not yet in `apps/api/.env.example` (not owned by this lane).
 
@@ -43,6 +43,25 @@ recording URLs are dropped at parse time. A retrieval worker must rebuild the Tw
 `account_sid` and `recording_sid` and must re-check consent at fetch time.
 
 Same event id and identical payload is accepted unchanged. Same id with a different payload returns 409.
+
+## Consent rules
+
+`consents` is append-only; the newest matching row decides. For a call, per purpose (`call_recording`, `call_transcript`):
+only rows with the same family, person and purpose count. The newest row with this exact `call_id` must be `answer=true` on
+`CALL_CONSENT_VERSION`. A newest call-independent row (`call_id` null) with `answer=false` at or after that time overrides it
+(ties go to refusal); a later call-specific yes overrides an earlier global refusal. Rows for other calls are ignored, so a
+yes on another call never revives a revoked consent here. The `calls` row must belong to the same family and person as the
+verified identity.
+
+- Twilio recording callbacks: no effective `call_recording` consent, or no `ai_disclosed_at`, means 403 and no write. Otherwise the event carries `call_id` and `consent_id` in the encrypted payload and in ID-only metadata. The retrieval worker must re-check consent at fetch time.
+- Sarvam post-call: `interaction_transcript` and `final_agent_variables` (the field names in Sarvam's webhook payloads) are kept in the encrypted payload only when an effective `call_transcript` consent exists for the `calls` row (`provider='sarvam'`, `external_id` = attempt id for outbound, interaction id for inbound). Otherwise they are dropped, the payload gets `review_required: consent_missing`, and metadata gets `review: consent_missing`. A provider retry after consent changes then conflicts (409) by design.
+- `person_id` is part of the hashed and encrypted payload of every event, so replaying an event after identity reassignment conflicts.
+
+## Writers that do not exist yet (dependencies)
+
+1. Sarvam dispatch: write the `provider_identities` attempt binding with the attempt id.
+2. `calls` rows: `provider` and `external_id` set to the Twilio CallSid, Sarvam attempt id (outbound) or interaction id (inbound), with `ai_disclosed_at` once disclosed. Inbound Sarvam calls have no row until something creates one.
+3. Consent capture: append `consents` rows with `purpose` `call_recording` / `call_transcript`, the exact `call_id`, and the `version` that `CALL_CONSENT_VERSION` names. The purpose names are this lane's proposal; no migration defines them.
 
 ## Limits
 

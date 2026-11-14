@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { handleSarvam, handleTeleCmi } from "../../src/lib/provider-ingestion/gateway";
-import { fakeStore, FAMILY, inbound, missed, outbound, PERSON } from "./helpers";
+import { describe, expect, it, vi } from "vitest";
+import { handleSarvam, handleTeleCmi, type SarvamConfig } from "../../src/lib/provider-ingestion/gateway";
+import { CALL_ID, consent, CONSENT_ID, fakeStore, FAMILY, inbound, missed, outbound, PERSON, VERSION } from "./helpers";
 
-const sarvam = { appId: "app-1", agentDigits: "918000000000", deploymentId: "dep-1" };
+const sarvam = { appId: "app-1", agentDigits: "918000000000", deploymentId: "dep-1", consentVersion: VERSION };
 const telecmi = { appId: 123, virtualDigits: "918000000001" };
 const buf = (v: unknown) => Buffer.from(typeof v === "string" ? v : JSON.stringify(v));
 const NOW = 1_794_000_000_000 + 1000;
@@ -107,5 +107,56 @@ describe("telecmi missed call", () => {
   it("does not acknowledge on persistence failure", async () => {
     const store = fakeStore({ ingest: async () => { throw new (await import("../../src/lib/webhook-security")).WebhookError("event_persistence_failed", 503); } });
     await expect(handleTeleCmi(buf(missed()), telecmi, () => store, NOW)).rejects.toMatchObject({ status: 503 });
+  });
+});
+
+describe("sarvam transcript retention", () => {
+  const withContent = (o: Record<string, unknown> = {}) => ({ interaction_transcript: [{ role: "user", en_text: "SYNTHETIC-HEALTH-NOTE" }], final_agent_variables: { note: "SYNTHETIC-VARIABLE" }, ...o });
+  const calls = (rows: ReturnType<typeof consent>[], call: unknown = { familyId: FAMILY, personId: PERSON, callId: CALL_ID, aiDisclosed: true }) =>
+    fakeStore({ findCall: vi.fn(async () => call as never), findConsents: vi.fn(async () => rows) });
+
+  it("retains transcript and variables only inside the encrypted payload when consent is proven", async () => {
+    const store = calls([consent({ purpose: "call_transcript" })]);
+    await handleSarvam(buf(outbound(withContent())), sarvam, () => store);
+    expect(store.findCall).toHaveBeenCalledWith("sarvam", "att-1");
+    expect(store.findConsents).toHaveBeenCalledWith(FAMILY, PERSON, CALL_ID, "call_transcript");
+    const event = store.ingest.mock.calls[0][0];
+    expect(event.payload).toMatchObject({ interaction_transcript: [{ role: "user", en_text: "SYNTHETIC-HEALTH-NOTE" }], final_agent_variables: { note: "SYNTHETIC-VARIABLE" }, call_id: CALL_ID, consent_id: CONSENT_ID });
+    expect(event).toMatchObject({ callId: CALL_ID, consentId: CONSENT_ID });
+    const { payload, ...ids } = event;
+    expect(JSON.stringify(ids)).not.toMatch(/SYNTHETIC/);
+  });
+  it("applies the same rule to inbound calls, looked up by interaction id", async () => {
+    const store = calls([consent({ purpose: "call_transcript" })]);
+    await handleSarvam(buf(inbound(withContent())), sarvam, () => store);
+    expect(store.findCall).toHaveBeenCalledWith("sarvam", "20261114/in-1");
+    expect(store.ingest.mock.calls[0][0].payload).toHaveProperty("interaction_transcript");
+  });
+  const redacted = async (store: ReturnType<typeof calls>, cfg: SarvamConfig = sarvam) => {
+    expect((await handleSarvam(buf(outbound(withContent())), cfg, () => store)).status).toBe(200);
+    const event = store.ingest.mock.calls[0][0];
+    expect(JSON.stringify(event)).not.toMatch(/SYNTHETIC/);
+    expect(event.review).toBe("consent_missing");
+    expect(event.payload).toMatchObject({ review_required: "consent_missing" });
+    expect(event.consentId).toBeUndefined();
+  };
+  it("redacts and flags review without proven consent", async () => {
+    await redacted(calls([]));
+    await redacted(calls([consent({ purpose: "call_transcript", answer: false })]));
+    await redacted(calls([consent({ purpose: "call_recording" })]));
+    await redacted(calls([consent({ purpose: "call_transcript", personId: "other" })]));
+    await redacted(calls([consent({ purpose: "call_transcript", callId: "other" })]));
+    await redacted(calls([consent({ purpose: "call_transcript" })], null));
+    await redacted(calls([consent({ purpose: "call_transcript" })], { familyId: FAMILY, personId: "someone-else", callId: CALL_ID, aiDisclosed: true }));
+    await redacted(calls([consent({ purpose: "call_transcript" })]), { ...sarvam, consentVersion: undefined });
+  });
+  it("does not look up consent when the payload has no content, and rejects malformed content", async () => {
+    const store = calls([]);
+    await handleSarvam(buf(outbound()), sarvam, () => store);
+    expect(store.findCall).not.toHaveBeenCalled();
+    expect(store.ingest.mock.calls[0][0].review).toBeUndefined();
+    for (const bad of [{ interaction_transcript: "x" }, { final_agent_variables: [] }]) {
+      await expect(handleSarvam(buf(outbound(bad)), sarvam, () => calls([]))).rejects.toMatchObject({ status: 400 });
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { serviceDatabase } from "../database";
 import { encryptWebhook, identityHash, payloadHash, WebhookError } from "../webhook-security";
-import type { ProviderEvent, ProviderStore, Identity } from "./gateway";
+import type { ConsentRow, Identity, ProviderEvent, ProviderStore } from "./gateway";
 
 /** Supabase-backed store. Service role stays server-side; nothing here logs payloads or phone numbers. */
 export function providerStore(): ProviderStore {
@@ -10,6 +10,11 @@ export function providerStore(): ProviderStore {
   const lookupFailed = () => new WebhookError("identity_lookup_failed", 503);
   const identity = (row: { family_id: unknown; person_id: unknown } | null): Identity | null =>
     row ? { familyId: String(row.family_id), personId: String(row.person_id) } : null;
+  const CONSENT_COLUMNS = "id,family_id,person_id,call_id,purpose,answer,version,created_at";
+  const consentRow = (r: Record<string, unknown>): ConsentRow => ({
+    id: String(r.id), familyId: String(r.family_id), personId: String(r.person_id), callId: r.call_id == null ? null : String(r.call_id),
+    purpose: String(r.purpose), answer: r.answer === true, version: String(r.version), createdAt: String(r.created_at),
+  });
 
   return {
     async findSarvamAttempt(appId, attemptId) {
@@ -28,18 +33,35 @@ export function providerStore(): ProviderStore {
       if (error) throw lookupFailed();
       return identity(data);
     },
-    async findTwilioCall(callSid) {
-      const { data, error } = await db.from("calls").select("family_id,person_id,ai_disclosed_at,recording_consent_at")
-        .eq("provider", "twilio").eq("external_id", callSid).maybeSingle();
+    async findCall(provider, externalId) {
+      const { data, error } = await db.from("calls").select("id,family_id,person_id,ai_disclosed_at")
+        .eq("provider", provider).eq("external_id", externalId).maybeSingle();
       if (error) throw lookupFailed();
       const who = identity(data);
-      return who && data ? { ...who, aiDisclosed: !!data.ai_disclosed_at, recordingConsent: !!data.recording_consent_at } : null;
+      return who && data ? { ...who, callId: String(data.id), aiDisclosed: !!data.ai_disclosed_at } : null;
+    },
+    async findConsents(familyId, personId, callId, purpose) {
+      // Two bounded queries so call-independent rows cannot crowd out this call's newest row.
+      const base = () => db.from("consents").select(CONSENT_COLUMNS).eq("family_id", familyId).eq("person_id", personId)
+        .eq("purpose", purpose).order("created_at", { ascending: false }).limit(20);
+      const [specific, global] = await Promise.all([base().eq("call_id", callId), base().is("call_id", null)]);
+      if (specific.error || global.error) throw new WebhookError("consent_lookup_failed", 503);
+      return [...(specific.data ?? []), ...(global.data ?? [])].map(consentRow);
     },
     async ingest(event: ProviderEvent) {
-      const body = Buffer.from(JSON.stringify(event.payload));
+      // person_id and consent/call IDs live inside the hashed, encrypted envelope as well as metadata, so a replay
+      // after identity reassignment or consent change within one family conflicts instead of being accepted.
+      const envelope: Record<string, unknown> = { person_id: event.personId, ...event.payload };
+      if (event.callId) envelope.call_id = event.callId;
+      if (event.consentId) envelope.consent_id = event.consentId;
+      const body = Buffer.from(JSON.stringify(envelope));
+      const metadata: Record<string, string> = { person_id: event.personId, status: event.status };
+      if (event.callId) metadata.call_id = event.callId;
+      if (event.consentId) metadata.consent_id = event.consentId;
+      if (event.review) metadata.review = event.review;
       const { error } = await db.rpc("ingest_raw_event", {
         p_source: event.source, p_provider_event_id: event.id, p_event_type: event.type, p_family_id: event.familyId,
-        p_metadata: { person_id: event.personId, status: event.status },
+        p_metadata: metadata,
         p_payload_hash: payloadHash(body),
         p_payload_ciphertext: encryptWebhook(body, encryptionKey, `${event.source}:${event.id}`),
       });
