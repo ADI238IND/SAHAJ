@@ -1,11 +1,10 @@
-import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import pg from 'pg';
+import { verifiedDatabaseUrl } from './database-url.mjs';
 
 // Explicit operator command only. Never import from a request handler.
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error('DATABASE_URL is required for checkpoint setup');
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for checkpoint setup');
+const connectionString = verifiedDatabaseUrl(process.env.DATABASE_URL);
 const pool = new pg.Pool({ connectionString, max: 1 });
-const saver = PostgresSaver.fromConnString(connectionString, { schema: 'sahaj_checkpoints' });
 let client;
 let stage = 'connect';
 const safeCodes = new Set(['42501', '28P01', '28000', '3D000', '3F000', '42P01', '42704', '42P07', '53300', '53400', '57P03', '08001', '08006', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID']);
@@ -14,7 +13,10 @@ try {
   stage = 'lock';
   await client.query("select pg_advisory_lock(hashtext('sahaj:checkpoint-setup:v1'))");
   stage = 'schema';
-  await client.query('create schema if not exists sahaj_checkpoints');
+  // Administrative migrations provision the pinned SDK schema. Runtime needs no
+  // database CREATE privilege (even CREATE SCHEMA IF NOT EXISTS requires it).
+  const version = await client.query('select max(v) as version, count(*) as count from sahaj_checkpoints.checkpoint_migrations');
+  if (version.rows[0]?.version !== 5 || Number(version.rows[0]?.count) !== 6) throw new Error('Apply checkpoint schema migration first');
   stage = 'harden-schema';
   // Revoke access before migrations, so interruption cannot expose new tables.
   await client.query('revoke all on schema sahaj_checkpoints from public');
@@ -29,7 +31,8 @@ try {
     end loop;
   end $hardening$`);
   stage = 'setup';
-  await saver.setup();
+  // Never call saver.setup() here: its CREATE SCHEMA would require database-wide
+  // CREATE. SDK upgrades must have an explicitly reviewed administrative migration.
   stage = 'harden-tables';
   await client.query(`do $hardening$
   declare table_name text; role_name text;
@@ -44,7 +47,7 @@ try {
       end loop;
     end loop;
   end $hardening$`);
-  console.log('Private Atlas checkpoint schema initialized and hardened.');
+  console.log('Private Atlas checkpoint migration verified and schema hardened.');
 } catch (error) {
   // Driver errors can contain credentials/connection details; never echo them.
   const code = safeCodes.has(error?.code) ? error.code : 'UNCLASSIFIED';
@@ -55,6 +58,5 @@ try {
     await client.query("select pg_advisory_unlock(hashtext('sahaj:checkpoint-setup:v1'))").catch(() => {});
     client.release();
   }
-  await saver.end();
   await pool.end();
 }
