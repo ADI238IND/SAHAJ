@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm --filter @sahaj/api dev",
     "build": "pnpm --filter @sahaj/api build",
-    "test": "pnpm --filter @sahaj/api test",
-    "typecheck": "pnpm --filter @sahaj/api typecheck"
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
   }
 }
